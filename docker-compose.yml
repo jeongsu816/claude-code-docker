@@ -2,6 +2,9 @@ services:
   claude-code-dev:
     build:
       context: .
+      args:
+        DEV_UID: ${DEV_UID:-1000}
+        DEV_GID: ${DEV_GID:-1000}
     image: claude-code-dev:latest
     container_name: claude-code-dev
     restart: unless-stopped

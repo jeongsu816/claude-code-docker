@@ -27,7 +27,13 @@ DEV_SSH_HOSTKEYS_PATH=/volume1/docker/claude-code-dev/ssh-host-keys
 DEV_PASSWORD=
 SSH_PORT=2222
 TTYD_PORT=7681
+DEV_UID=1000
+DEV_GID=1000
 ```
+
+`DEV_UID`/`DEV_GID`는 이미지 빌드 시 `dev` 계정에 고정되는 값이다(기본 1000).
+재빌드해도 값이 흔들리지 않으므로 bind mount한 NAS 경로의 파일 소유권이
+꼬이지 않는다. NAS의 다른 계정과 UID를 맞추고 싶을 때만 바꾸면 된다.
 
 `DEV_HOME_PATH`, `DEV_SSH_HOSTKEYS_PATH`는 NAS의 실제 디렉토리 경로로,
 컨테이너의 `/home/dev`, `/etc/ssh/host_keys`에 각각 bind mount된다

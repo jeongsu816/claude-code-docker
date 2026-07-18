@@ -2,6 +2,8 @@ FROM debian:bookworm-slim
 
 ARG NODE_MAJOR=20
 ARG TTYD_VERSION=1.7.7
+ARG DEV_UID=1000
+ARG DEV_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -49,6 +51,9 @@ RUN set -eux; \
     chmod +x /usr/local/bin/ttyd
 
 # --- dev user -------------------------------------------------------------
+# UID/GID are pinned (not left to useradd's default assignment) so that
+# ownership of bind-mounted host paths (DEV_HOME_PATH etc.) stays valid
+# across image rebuilds, not just container recreation.
 # NOTE: no NOPASSWD entry is ever added for dev — sudo always prompts for a
 # password so Claude Code cannot silently self-elevate.
 RUN printf '%s\n' \
@@ -58,7 +63,8 @@ RUN printf '%s\n' \
     '    exec tmux new-session -A -s main' \
     'fi' \
     >> /etc/skel/.bashrc \
-    && useradd -m -s /bin/bash dev \
+    && groupadd -g "${DEV_GID}" dev \
+    && useradd -m -u "${DEV_UID}" -g "${DEV_GID}" -s /bin/bash dev \
     && echo 'dev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/dev \
     && chmod 440 /etc/sudoers.d/dev \
     && visudo -cf /etc/sudoers.d/dev
