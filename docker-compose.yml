@@ -7,6 +7,7 @@ services:
         DEV_GID: ${DEV_GID:-1000}
     image: claude-code-dev:latest
     container_name: claude-code-dev
+    hostname: ${DEV_HOSTNAME:-claude-code-dev}
     restart: unless-stopped
     ports:
       - "${SSH_PORT:-2222}:22"
