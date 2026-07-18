@@ -10,12 +10,17 @@ log() {
     echo "[entrypoint] $*"
 }
 
-# The home directory is a named volume; on its very first use Docker copies
-# the image's pre-existing /home/dev (populated at build time from /etc/skel)
-# into it, but ownership can still end up root:root depending on the volume
-# driver, so re-assert it on every start.
+# The home directory is typically bind-mounted from the host, so unlike a
+# named volume Docker does NOT seed it from the image on first use. Populate
+# it from /etc/skel (which carries the tmux auto-attach .bashrc snippet)
+# whenever it's missing the basics, then (re)assert ownership.
 mkdir -p "${DEV_HOME}"
-chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
+if [ ! -e "${DEV_HOME}/.bashrc" ]; then
+    cp -rn /etc/skel/. "${DEV_HOME}/"
+    chown -R "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
+else
+    chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
+fi
 
 if [ ! -f "${MARKER}" ]; then
     if [ -n "${DEV_PASSWORD:-}" ]; then
@@ -50,11 +55,14 @@ else
     log "경고: ${DOCKER_SOCK} 가 마운트되지 않았습니다. NAS의 docker를 제어할 수 없습니다."
 fi
 
-mkdir -p /etc/ssh
-if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
-    ssh-keygen -A
-    log "SSH 호스트 키를 새로 생성했습니다."
-fi
+mkdir -p /etc/ssh/host_keys
+for key_type in rsa ecdsa ed25519; do
+    key_path="/etc/ssh/host_keys/ssh_host_${key_type}_key"
+    if [ ! -f "${key_path}" ]; then
+        ssh-keygen -q -t "${key_type}" -f "${key_path}" -N ""
+        log "SSH 호스트 키(${key_type})를 새로 생성했습니다."
+    fi
+done
 
 if [ -f "${DEV_HOME}/.ssh/authorized_keys" ]; then
     chown -R "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.ssh"

@@ -6,17 +6,13 @@ services:
     container_name: claude-code-dev
     restart: unless-stopped
     ports:
-      - "2222:22"
-      - "7681:7681"
+      - "${SSH_PORT:-2222}:22"
+      - "${TTYD_PORT:-7681}:7681"
     volumes:
-      - dev-home:/home/dev
-      - dev-ssh-hostkeys:/etc/ssh
+      - ${DEV_HOME_PATH}:/home/dev
+      - ${DEV_SSH_HOSTKEYS_PATH}:/etc/ssh/host_keys
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       # 지정하지 않으면 컨테이너 최초 실행 시 무작위 비밀번호가 생성되어
       # `docker logs claude-code-dev` 에 출력됩니다.
-      DEV_PASSWORD: ""
-
-volumes:
-  dev-home:
-  dev-ssh-hostkeys:
+      DEV_PASSWORD: ${DEV_PASSWORD:-}

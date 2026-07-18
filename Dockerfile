@@ -64,11 +64,19 @@ RUN printf '%s\n' \
     && visudo -cf /etc/sudoers.d/dev
 
 # --- SSH server hardening -------------------------------------------------
-RUN printf '%s\n' \
+# Host keys live under /etc/ssh/host_keys so that path alone can be bind
+# mounted for persistence, without shadowing the rest of /etc/ssh (sshd_config
+# etc.) the way bind-mounting /etc/ssh itself would.
+RUN rm -f /etc/ssh/ssh_host_* \
+    && mkdir -p /etc/ssh/host_keys \
+    && printf '%s\n' \
     'PermitRootLogin no' \
     'PasswordAuthentication yes' \
     'AllowUsers dev' \
     'UsePAM yes' \
+    'HostKey /etc/ssh/host_keys/ssh_host_rsa_key' \
+    'HostKey /etc/ssh/host_keys/ssh_host_ecdsa_key' \
+    'HostKey /etc/ssh/host_keys/ssh_host_ed25519_key' \
     > /etc/ssh/sshd_config.d/dev.conf
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
