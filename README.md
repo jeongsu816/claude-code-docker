@@ -22,8 +22,8 @@ vi .env
 ```
 
 ```dotenv
-DEV_HOME_PATH=/volume1/docker/claude-code-dev/home
-DEV_SSH_HOSTKEYS_PATH=/volume1/docker/claude-code-dev/ssh-host-keys
+DEV_HOME_PATH=/volume1/docker/claude-code-docker/home
+DEV_SSH_HOSTKEYS_PATH=/volume1/docker/claude-code-docker/ssh-host-keys
 DEV_PASSWORD=
 SSH_PORT=2222
 TTYD_PORT=7681
@@ -51,7 +51,7 @@ docker compose up -d --build
 NAS가 ARM 아키텍처라면 buildx로 해당 아키텍처를 지정해서 빌드한다:
 
 ```bash
-docker buildx build --platform linux/arm64 -t claude-code-dev:latest --load .
+docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 ```
 
 ## 최초 비밀번호 확인
@@ -60,7 +60,7 @@ docker buildx build --platform linux/arm64 -t claude-code-dev:latest --load .
 
 - `.env`의 `DEV_PASSWORD`에 값을 채워두면 그 값이 사용된다.
 - 비워두면 무작위 비밀번호가 생성되어 다음 두 곳에 남는다:
-  - `docker logs claude-code-dev`
+  - `docker logs claude-code-docker`
   - 컨테이너 내부 `/home/dev/.initial_password`
 
 이후 실행부터는 (홈 디렉토리가 bind mount로 영속화되므로) 비밀번호를 다시

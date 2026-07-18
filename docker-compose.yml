@@ -1,13 +1,13 @@
 services:
-  claude-code-dev:
+  claude-code-docker:
     build:
       context: .
       args:
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
-    image: claude-code-dev:latest
-    container_name: claude-code-dev
-    hostname: ${DEV_HOSTNAME:-claude-code-dev}
+    image: claude-code-docker:latest
+    container_name: claude-code-docker
+    hostname: ${DEV_HOSTNAME:-claude-code-docker}
     restart: unless-stopped
     ports:
       - "${SSH_PORT:-2222}:22"
@@ -18,5 +18,5 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       # 지정하지 않으면 컨테이너 최초 실행 시 무작위 비밀번호가 생성되어
-      # `docker logs claude-code-dev` 에 출력됩니다.
+      # `docker logs claude-code-docker` 에 출력됩니다.
       DEV_PASSWORD: ${DEV_PASSWORD:-}
