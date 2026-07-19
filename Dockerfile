@@ -15,9 +15,9 @@ ARG CLAUDE_CODE_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 # claude has a built-in self-updater that would otherwise silently replace
-# whatever CLAUDE_CODE_VERSION was installed at build time (e.g. reverting a
-# Bun-crash workaround pin). Docker images are meant to be rebuilt to update,
-# not self-mutate at runtime, so this is off unconditionally.
+# whatever version CLAUDE_CODE_VERSION installed at build time. Docker
+# images are meant to be rebuilt to update, not self-mutate at runtime, so
+# this is off unconditionally.
 ENV DISABLE_AUTOUPDATER=1
 
 # --- base packages ------------------------------------------------------
@@ -45,9 +45,9 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Node.js + Claude Code CLI ------------------------------------------
-# CLAUDE_CODE_VERSION defaults to latest; pin it (e.g. 2.1.112) to test/use a
-# version predating the Bun-compiled binary switch (2.1.113+), which is
-# useful on hosts with a kernel too old for Bun's getrandom() usage.
+# CLAUDE_CODE_VERSION defaults to latest (whatever is current at build time,
+# since DISABLE_AUTOUPDATER keeps it from drifting afterward); set it to pin
+# a specific version instead.
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \

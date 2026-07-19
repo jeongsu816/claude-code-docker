@@ -3,26 +3,41 @@
  * still on 3.10.x), the getrandom(2) syscall doesn't exist. Bun (the
  * runtime claude is compiled with) calls it via libc's generic syscall()
  * rather than the higher-level getrandom() symbol, so intercepting
- * syscall() here and falling back to /dev/urandom on ENOSYS covers every
- * getrandom(2) call site in the process, regardless of which one hits it.
+ * syscall() catches that. Other programs in the container might instead
+ * call the higher-level getrandom() libc symbol directly, so that's
+ * overridden too, in case anything else on the system needs it.
  *
  * On kernels that do have getrandom(2), the real syscall succeeds and this
- * shim is a no-op passthrough.
+ * shim is a no-op passthrough — safe to leave on unconditionally.
+ *
+ * The ENOSYS fallback is logged to syslog once per process (not per call,
+ * since a process can easily make dozens of getrandom() calls).
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <syslog.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 
 typedef long (*syscall_fn)(long number, ...);
 static syscall_fn real_syscall = NULL;
+static int logged = 0;
 
-static long fallback_getrandom(void *buf, size_t buflen, unsigned int flags) {
-    (void)flags;
+static void log_fallback_once(void) {
+    if (logged) return;
+    logged = 1;
+    openlog("getrandom_shim", LOG_PID, LOG_USER);
+    syslog(LOG_NOTICE,
+           "SYS_getrandom -> ENOSYS (kernel lacks getrandom(2)); "
+           "falling back to /dev/urandom for this and further calls");
+    closelog();
+}
+
+static long fallback_getrandom(void *buf, size_t buflen) {
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd < 0) return -1;
     ssize_t total = 0;
@@ -33,6 +48,22 @@ static long fallback_getrandom(void *buf, size_t buflen, unsigned int flags) {
     }
     close(fd);
     return total;
+}
+
+static long do_getrandom(void *buf, size_t buflen, unsigned int flags) {
+    if (!real_syscall) {
+        real_syscall = (syscall_fn)dlsym(RTLD_NEXT, "syscall");
+    }
+    long ret = real_syscall(SYS_getrandom, buf, buflen, flags);
+    if (ret == -1 && errno == ENOSYS) {
+        log_fallback_once();
+        return fallback_getrandom(buf, buflen);
+    }
+    return ret;
+}
+
+ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
+    return do_getrandom(buf, buflen, flags);
 }
 
 long syscall(long number, ...) {
@@ -51,12 +82,7 @@ long syscall(long number, ...) {
     va_end(ap);
 
     if (number == SYS_getrandom) {
-        long ret = real_syscall(number, a1, a2, a3, a4, a5, a6);
-        if (ret == -1 && errno == ENOSYS) {
-            fprintf(stderr, "[getrandom_shim] SYS_getrandom -> ENOSYS, falling back to /dev/urandom\n");
-            return fallback_getrandom((void *)a1, (size_t)a2, (unsigned int)a3);
-        }
-        return ret;
+        return do_getrandom((void *)a1, (size_t)a2, (unsigned int)a3);
     }
 
     return real_syscall(number, a1, a2, a3, a4, a5, a6);
