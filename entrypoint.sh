@@ -27,7 +27,12 @@ if [ ! -f "${MARKER}" ]; then
         echo "${DEV_USER}:${DEV_PASSWORD}" | chpasswd
         log "dev 계정 비밀번호를 DEV_PASSWORD 환경변수 값으로 설정했습니다."
     else
-        GENERATED_PASSWORD="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
+        # pipefail must be off for this one command: `head -c 20` exits as
+        # soon as it has its 20 bytes, so `tr` reliably gets SIGPIPE on its
+        # next write — a non-zero exit that pipefail would otherwise treat
+        # as a hard failure under `set -e`, even though the substitution's
+        # actual output is correct.
+        GENERATED_PASSWORD="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
         echo "${DEV_USER}:${GENERATED_PASSWORD}" | chpasswd
         printf '%s\n' "${GENERATED_PASSWORD}" >"${DEV_HOME}/.initial_password"
         chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.initial_password"
@@ -71,5 +76,20 @@ if [ -f "${DEV_HOME}/.ssh/authorized_keys" ]; then
 fi
 
 mkdir -p /var/run/sshd
+
+# Only disable claude's auto-updater when a specific CLAUDE_CODE_VERSION was
+# pinned at build time (see /etc/claude-code-version-pin, written by the
+# Dockerfile). Left at "latest", claude is free to self-update as normal.
+# Set two ways since the two access paths inherit environment differently:
+# `export` covers processes forked directly from this script (supervisord ->
+# ttyd -> tmux), while /etc/environment is what PAM applies to fresh SSH
+# login sessions, which do NOT simply inherit sshd's own process env.
+if [ -f /etc/claude-code-version-pin ] && [ "$(cat /etc/claude-code-version-pin)" != "latest" ]; then
+    export DISABLE_AUTOUPDATER=1
+    if ! grep -q '^DISABLE_AUTOUPDATER=' /etc/environment 2>/dev/null; then
+        echo 'DISABLE_AUTOUPDATER=1' >> /etc/environment
+    fi
+    log "CLAUDE_CODE_VERSION이 $(cat /etc/claude-code-version-pin) 로 고정되어 있어 자동 업데이트를 비활성화합니다."
+fi
 
 exec supervisord -c /etc/supervisor/conf.d/supervisord.conf

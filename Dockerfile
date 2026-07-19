@@ -14,11 +14,6 @@ ARG DEV_GID=1000
 ARG CLAUDE_CODE_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
-# claude has a built-in self-updater that would otherwise silently replace
-# whatever version CLAUDE_CODE_VERSION installed at build time. Docker
-# images are meant to be rebuilt to update, not self-mutate at runtime, so
-# this is off unconditionally.
-ENV DISABLE_AUTOUPDATER=1
 
 # --- base packages ------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,14 +40,16 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Node.js + Claude Code CLI ------------------------------------------
-# CLAUDE_CODE_VERSION defaults to latest (whatever is current at build time,
-# since DISABLE_AUTOUPDATER keeps it from drifting afterward); set it to pin
-# a specific version instead.
+# CLAUDE_CODE_VERSION defaults to latest and is left free to self-update at
+# runtime (claude's built-in auto-updater). Setting it to a specific version
+# instead pins that version — entrypoint.sh reads the marker file below and
+# disables the auto-updater only in that case, so a pin actually sticks.
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && echo "${CLAUDE_CODE_VERSION}" > /etc/claude-code-version-pin
 
 # --- ttyd (static binary; not packaged for Debian bookworm) -------------
 RUN set -eux; \
