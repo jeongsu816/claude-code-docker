@@ -173,13 +173,19 @@ Linux 3.17부터 생겨서, 커널이 그보다 오래된 호스트(일부 구�
 항상 적용된다. libc의 `getrandom()`과 `syscall()` 양쪽 경로를 모두
 가로채서(Bun은 `syscall()`을 쓰지만, 컨테이너 안 다른 프로그램이 직접
 `getrandom()`을 부를 수도 있으므로 둘 다 후킹한다) `ENOSYS`로 실패하면
-`/dev/urandom`을 직접 읽어 대신 반환한다. 프로세스당 최초 1회만 stderr에
-기록하고(반복 호출마다 찍지 않음) 이후에는 조용히 동작한다. entrypoint.sh
-자신이나 supervisord가 관리하는 프로세스(sshd/ttyd/filebrowser)에서
-발생하면 `docker logs`에 그대로 남는다 — 다만 SSH로 접속해 대화형으로 쓰는
-셸(tmux/claude)의 stderr는 SSH 클라이언트로 가지 컨테이너 로그로는 안
-잡힌다. 정상 커널에서는 실제 syscall이 그대로 성공하므로 완전히 무해한
-passthrough다.
+`/dev/urandom`을 직접 읽어 대신 반환한다. 컨테이너는 항상 이 심을 켠 채로
+실행되므로 이 폴백 경로는 예외적인 상황이 아니라 정상적인 동작이라, 별도로
+로그를 남기지 않고 조용히 동작한다. 정상 커널에서는 실제 syscall이 그대로
+성공하므로 완전히 무해한 passthrough다.
+
+glibc 2.36 이상의 `arc4random()`/`arc4random_buf()`/`arc4random_uniform()`은
+별도로 후킹한다 — `sshd`가 이 함수들을 직접 호출하는데, glibc 내부 구현이
+`getrandom(2)`를 raw `syscall` 명령어로 인라인 호출해서 위의 두 후킹을
+우회하고, `ENOSYS`를 받으면 복구 불가능한 오류로 보고 그대로
+`abort()`한다(`Fatal glibc error: cannot get entropy for arc4random`) —
+이게 구형 커널에서 SSH 접속마다 생기는 자식 프로세스가 죽던 원인이었다.
+`arc4random*` 자체는 일반적으로 export된 동적 심볼이라 이것도 그대로
+후킹해서 같은 폴백 경로로 우회한다.
 
 시놀로지 DS216+II(커널 3.10.108)에서 실제로 정상 동작을 확인했다.
 
@@ -187,5 +193,5 @@ passthrough다.
 기본값 `latest`면 빌드 시점의 최신 버전이 설치되고 `claude`의 내장
 자동 업데이트 기능도 그대로 켜져 있다. 특정 버전(예: `2.1.112`)으로
 지정하면 그 버전이 설치되고, entrypoint가 자동 업데이트를 꺼서 고정된
-버전이 실제로 유지되도록 한다. 위 셔임과는 무관한 일반적인 버전 고정
+버전이 실제로 유지되도록 한다. 위 심과는 무관한 일반적인 버전 고정
 기능이다.

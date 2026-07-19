@@ -5,23 +5,21 @@
  * rather than the higher-level getrandom() symbol, so intercepting
  * syscall() catches that. Other programs in the container might instead
  * call the higher-level getrandom() libc symbol directly, so that's
- * overridden too, in case anything else on the system needs it.
+ * overridden too, in case anything else on the system needs it. glibc's
+ * arc4random()/arc4random_buf()/arc4random_uniform() are a third path that
+ * needs its own override — see the comment above their implementations
+ * below for why neither of the first two overrides catches those.
  *
  * On kernels that do have getrandom(2), the real syscall succeeds and this
- * shim is a no-op passthrough — safe to leave on unconditionally.
- *
- * The ENOSYS fallback is printed to stderr once per process (not per call,
- * since a process can easily make dozens of getrandom() calls). Simple
- * first version — whether that reaches `docker logs` depends on what the
- * calling process's stderr is connected to (supervisord-managed programs
- * like ttyd/filebrowser/sshd already have stderr_logfile=/dev/stderr, so
- * those are covered; an interactive SSH session's stderr goes to the SSH
- * client instead).
+ * shim is a no-op passthrough — safe to leave on unconditionally. Since
+ * it's always active regardless of the actual kernel, the ENOSYS fallback
+ * path is expected/routine rather than exceptional, so it doesn't log
+ * anything.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdarg.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -30,17 +28,6 @@
 
 typedef long (*syscall_fn)(long number, ...);
 static syscall_fn real_syscall = NULL;
-static int logged = 0;
-
-static void log_fallback_once(void) {
-    if (logged) return;
-    logged = 1;
-    fprintf(stderr,
-        "[getrandom_shim] pid=%d: SYS_getrandom -> ENOSYS (kernel lacks "
-        "getrandom(2)); falling back to /dev/urandom for this and further "
-        "calls\n",
-        (int)getpid());
-}
 
 static long fallback_getrandom(void *buf, size_t buflen) {
     int fd = open("/dev/urandom", O_RDONLY);
@@ -61,7 +48,6 @@ static long do_getrandom(void *buf, size_t buflen, unsigned int flags) {
     }
     long ret = real_syscall(SYS_getrandom, buf, buflen, flags);
     if (ret == -1 && errno == ENOSYS) {
-        log_fallback_once();
         return fallback_getrandom(buf, buflen);
     }
     return ret;
@@ -91,4 +77,55 @@ long syscall(long number, ...) {
     }
 
     return real_syscall(number, a1, a2, a3, a4, a5, a6);
+}
+
+/*
+ * glibc >= 2.36's arc4random()/arc4random_buf()/arc4random_uniform() are
+ * a separate problem: sshd calls these directly (confirmed via `nm -D
+ * /usr/sbin/sshd`, which shows them as undefined GLIBC_2.36 symbols), but
+ * glibc's own implementation reaches SYS_getrandom via a raw `syscall`
+ * instruction inlined in its internal helper — not through the public
+ * getrandom() or syscall() symbols — so neither override above ever sees
+ * that call. On ENOSYS glibc treats this as unrecoverable and aborts
+ * (`Fatal glibc error: cannot get entropy for arc4random`), which is what
+ * was crashing sshd's per-connection child on affected kernels. Since
+ * arc4random* are themselves normal exported dynamic symbols, overriding
+ * them here intercepts the call before it ever reaches glibc's fragile
+ * internal implementation, sidestepping the raw syscall entirely.
+ */
+
+static long get_random_bytes(void *buf, size_t buflen) {
+    size_t filled = 0;
+    while (filled < buflen) {
+        long n = do_getrandom((char *)buf + filled, buflen - filled, 0);
+        if (n <= 0) return -1;
+        filled += (size_t)n;
+    }
+    return (long)filled;
+}
+
+void arc4random_buf(void *buf, size_t nbytes) {
+    get_random_bytes(buf, nbytes);
+}
+
+uint32_t arc4random(void) {
+    uint32_t val;
+    get_random_bytes(&val, sizeof(val));
+    return val;
+}
+
+/* Standard OpenBSD-style rejection sampling, avoids modulo bias. */
+uint32_t arc4random_uniform(uint32_t upper_bound) {
+    uint32_t r, min;
+
+    if (upper_bound < 2) return 0;
+
+    min = -upper_bound % upper_bound;
+
+    for (;;) {
+        r = arc4random();
+        if (r >= min) break;
+    }
+
+    return r % upper_bound;
 }
