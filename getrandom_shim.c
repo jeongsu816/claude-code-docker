@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -105,12 +106,12 @@ static long get_random_bytes(void *buf, size_t buflen) {
 }
 
 void arc4random_buf(void *buf, size_t nbytes) {
-    get_random_bytes(buf, nbytes);
+    if (get_random_bytes(buf, nbytes) < 0) abort();
 }
 
 uint32_t arc4random(void) {
     uint32_t val;
-    get_random_bytes(&val, sizeof(val));
+    if (get_random_bytes(&val, sizeof(val)) < 0) abort();
     return val;
 }
 
