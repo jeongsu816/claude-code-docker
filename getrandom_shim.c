@@ -10,16 +10,21 @@
  * On kernels that do have getrandom(2), the real syscall succeeds and this
  * shim is a no-op passthrough — safe to leave on unconditionally.
  *
- * The ENOSYS fallback is logged to syslog once per process (not per call,
- * since a process can easily make dozens of getrandom() calls).
+ * The ENOSYS fallback is printed to stderr once per process (not per call,
+ * since a process can easily make dozens of getrandom() calls). Simple
+ * first version — whether that reaches `docker logs` depends on what the
+ * calling process's stderr is connected to (supervisord-managed programs
+ * like ttyd/filebrowser/sshd already have stderr_logfile=/dev/stderr, so
+ * those are covered; an interactive SSH session's stderr goes to the SSH
+ * client instead).
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <syslog.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 
@@ -30,11 +35,11 @@ static int logged = 0;
 static void log_fallback_once(void) {
     if (logged) return;
     logged = 1;
-    openlog("getrandom_shim", LOG_PID, LOG_USER);
-    syslog(LOG_NOTICE,
-           "SYS_getrandom -> ENOSYS (kernel lacks getrandom(2)); "
-           "falling back to /dev/urandom for this and further calls");
-    closelog();
+    fprintf(stderr,
+        "[getrandom_shim] pid=%d: SYS_getrandom -> ENOSYS (kernel lacks "
+        "getrandom(2)); falling back to /dev/urandom for this and further "
+        "calls\n",
+        (int)getpid());
 }
 
 static long fallback_getrandom(void *buf, size_t buflen) {

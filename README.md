@@ -163,10 +163,12 @@ Linux 3.17부터 생겨서, 커널이 그보다 오래된 호스트(일부 구�
 항상 적용된다. libc의 `getrandom()`과 `syscall()` 양쪽 경로를 모두
 가로채서(Bun은 `syscall()`을 쓰지만, 컨테이너 안 다른 프로그램이 직접
 `getrandom()`을 부를 수도 있으므로 둘 다 후킹한다) `ENOSYS`로 실패하면
-`/dev/urandom`을 직접 읽어 대신 반환한다. 최초 1회만 syslog로 기록하고(
-컨테이너에 별도 syslog 데몬이 없으면 이 로그는 어디에도 남지 않는다 —
-필요하면 직접 syslog 수신 설정을 추가해야 한다), 이후에는 조용히
-동작한다. 정상 커널에서는 실제 syscall이 그대로 성공하므로 완전히 무해한
+`/dev/urandom`을 직접 읽어 대신 반환한다. 프로세스당 최초 1회만 stderr에
+기록하고(반복 호출마다 찍지 않음) 이후에는 조용히 동작한다. entrypoint.sh
+자신이나 supervisord가 관리하는 프로세스(sshd/ttyd/filebrowser)에서
+발생하면 `docker logs`에 그대로 남는다 — 다만 SSH로 접속해 대화형으로 쓰는
+셸(tmux/claude)의 stderr는 SSH 클라이언트로 가지 컨테이너 로그로는 안
+잡힌다. 정상 커널에서는 실제 syscall이 그대로 성공하므로 완전히 무해한
 passthrough다.
 
 시놀로지 DS216+II(커널 3.10.108)에서 실제로 정상 동작을 확인했다.
