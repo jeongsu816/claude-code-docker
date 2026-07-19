@@ -58,15 +58,18 @@ else
     ACTUAL_PASSWORD="$(cat "${DEV_HOME}/.initial_password")"
 fi
 
+# Deliberately NOT adding dev to the socket's group here. docker.sock access
+# is equivalent to unrestricted root on the NAS host, and dev's sudo already
+# always requires a password (no NOPASSWD, see Dockerfile) specifically so
+# Claude Code can't silently self-elevate. Putting dev directly in the
+# socket's group would bypass that same protection for docker, letting
+# Claude run `docker` (and, through it, reach the whole host) without any
+# password prompt. Leaving dev out of the group means docker is only usable
+# via `sudo docker ...`, which still prompts every time; root always has
+# access to the socket regardless of group membership, so no group setup is
+# needed for that path to work.
 if [ -S "${DOCKER_SOCK}" ]; then
-    SOCK_GID="$(stat -c %g "${DOCKER_SOCK}")"
-    EXISTING_GROUP="$(getent group "${SOCK_GID}" | cut -d: -f1 || true)"
-    if [ -z "${EXISTING_GROUP}" ]; then
-        groupadd -g "${SOCK_GID}" dockerhost
-        EXISTING_GROUP="dockerhost"
-    fi
-    usermod -aG "${EXISTING_GROUP}" "${DEV_USER}"
-    log "dev 사용자를 docker.sock 그룹(${EXISTING_GROUP}, gid=${SOCK_GID})에 추가했습니다."
+    log "${DOCKER_SOCK} 가 마운트되어 있습니다. dev는 이 소켓의 그룹에 속하지 않으므로, NAS의 Docker를 제어하려면 'sudo docker ...' 로 매번 비밀번호를 입력해야 합니다."
 else
     log "경고: ${DOCKER_SOCK} 가 마운트되지 않았습니다. NAS의 docker를 제어할 수 없습니다."
 fi

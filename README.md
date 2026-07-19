@@ -3,8 +3,9 @@
 시놀로지 NAS에서 Claude Code를 상시 실행하기 위한 Docker 이미지. `dev`
 사용자로 SSH 또는 브라우저(ttyd)로 접속하며, 두 경로 모두 동일한 tmux
 세션(`main`)에 붙기 때문에 접속이 끊겨도 실행 중이던 작업이 그대로
-유지된다. `dev`는 `/var/run/docker.sock`을 통해 NAS의 Docker를 직접
-제어할 수 있다. 웹 파일 매니저(filebrowser)도 포함되어 있어 `/home/dev`를
+유지된다. `dev`는 `/var/run/docker.sock`을 통해 NAS의 Docker를
+`sudo docker ...`로 제어할 수 있다 (매번 비밀번호 필요 — 아래 "NAS Docker
+제어" 참고). 웹 파일 매니저(filebrowser)도 포함되어 있어 `/home/dev`를
 브라우저에서 직접 관리할 수 있다.
 
 ## 요구사항
@@ -108,9 +109,16 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
 
 ## NAS Docker 제어
 
-컨테이너 시작 시 entrypoint가 마운트된 `/var/run/docker.sock`의 GID를
-확인해 `dev`를 해당 그룹에 자동으로 추가한다. 정상적으로 매핑되면 `dev`
-세션에서 `docker ps` 등으로 NAS의 컨테이너를 직접 조회/제어할 수 있다.
+`dev`는 `/var/run/docker.sock`의 그룹에 **의도적으로 속하지 않는다**.
+`docker.sock` 접근 권한은 사실상 NAS 호스트 전체에 대한 root 권한과
+동등한데, `dev`를 그 그룹에 바로 넣어버리면 sudo에 비밀번호를 요구하게
+막아둔 것(위 "sudo 동작" 참고)과 별개로 Claude Code가 비밀번호 없이
+`docker` 명령으로 호스트에 무제한 접근할 수 있게 되기 때문이다. 대신
+`sudo docker ps` 처럼 **매번 비밀번호를 입력**해야 NAS의 컨테이너를
+조회/제어할 수 있다 — root는 소켓 소유자라서 그룹 멤버십과 무관하게 항상
+접근 가능하므로 별도 그룹 설정 없이 `sudo`만으로 동작한다. 사람이 직접
+비밀번호를 입력하는 순간에만 실제 운영 중인 컨테이너에 영향을 줄 수 있는
+명령이 실행되도록 하기 위한 설계다.
 
 ## 영속화되는 데이터
 
@@ -131,8 +139,10 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
   `${DEV_HOME_PATH}/.ssh/authorized_keys`에 공개키를 넣어 키 기반 인증으로
   전환하는 것을 권장한다.
 - `docker.sock` 마운트는 NAS 호스트 전체에 대한 강한 권한을 컨테이너에
-  부여하는 것과 사실상 동등하다. `dev` 계정 자격증명을 신뢰할 수 있는
-  사람에게만 공유할 것.
+  부여하는 것과 사실상 동등하다. `dev`는 이 소켓의 그룹에 속하지 않으므로
+  `sudo` 비밀번호 없이는 사용할 수 없지만(위 "NAS Docker 제어" 참고),
+  `dev` 계정 자격증명(로그인 비밀번호)을 신뢰할 수 있는 사람에게만 공유할
+  것.
 - 여러 서비스를 Authentik 같은 SSO 뒤에 두고 운영 중이라면, ttyd와
   filebrowser는 둘 다 HTTP 기반이라 forward-auth(리버스 프록시 +
   Authentik Outpost)로 붙일 수 있다 — filebrowser는 `--auth.method=proxy`
