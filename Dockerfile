@@ -7,6 +7,11 @@ ARG DEV_GID=1000
 ARG CLAUDE_CODE_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
+# claude has a built-in self-updater that would otherwise silently replace
+# whatever CLAUDE_CODE_VERSION was installed at build time (e.g. reverting a
+# Bun-crash workaround pin). Docker images are meant to be rebuilt to update,
+# not self-mutate at runtime, so this is off unconditionally.
+ENV DISABLE_AUTOUPDATER=1
 
 # --- base packages ------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
