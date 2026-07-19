@@ -22,9 +22,15 @@ else
     chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
 fi
 
+# Resolve the dev account's actual current password on every boot (not just
+# first run), since ttyd and filebrowser auth below need it every time
+# supervisord (re)starts them. .initial_password is the single source of
+# truth for this once set — NOT re-derived from DEV_PASSWORD on every boot,
+# because that env var could be changed or dropped from .env later while the
+# Linux password (set once, on first run) stays whatever it was.
 if [ ! -f "${MARKER}" ]; then
     if [ -n "${DEV_PASSWORD:-}" ]; then
-        echo "${DEV_USER}:${DEV_PASSWORD}" | chpasswd
+        ACTUAL_PASSWORD="${DEV_PASSWORD}"
         log "dev 계정 비밀번호를 DEV_PASSWORD 환경변수 값으로 설정했습니다."
     else
         # pipefail must be off for this one command: `head -c 20` exits as
@@ -32,19 +38,24 @@ if [ ! -f "${MARKER}" ]; then
         # next write — a non-zero exit that pipefail would otherwise treat
         # as a hard failure under `set -e`, even though the substitution's
         # actual output is correct.
-        GENERATED_PASSWORD="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
-        echo "${DEV_USER}:${GENERATED_PASSWORD}" | chpasswd
-        printf '%s\n' "${GENERATED_PASSWORD}" >"${DEV_HOME}/.initial_password"
-        chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.initial_password"
-        chmod 600 "${DEV_HOME}/.initial_password"
+        ACTUAL_PASSWORD="$(set +o pipefail; tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)"
         log "=============================================="
         log " dev 계정 초기 비밀번호가 자동 생성되었습니다:"
-        log " ${GENERATED_PASSWORD}"
+        log " ${ACTUAL_PASSWORD}"
         log " (이 값은 ${DEV_HOME}/.initial_password 에도 저장됩니다)"
         log "=============================================="
     fi
+    echo "${DEV_USER}:${ACTUAL_PASSWORD}" | chpasswd
+    # Always persisted (even when it came from DEV_PASSWORD), so subsequent
+    # boots have a reliable value to read back regardless of what .env says
+    # by then.
+    printf '%s\n' "${ACTUAL_PASSWORD}" >"${DEV_HOME}/.initial_password"
+    chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.initial_password"
+    chmod 600 "${DEV_HOME}/.initial_password"
     touch "${MARKER}"
     chown "${DEV_USER}:${DEV_USER}" "${MARKER}"
+else
+    ACTUAL_PASSWORD="$(cat "${DEV_HOME}/.initial_password")"
 fi
 
 if [ -S "${DOCKER_SOCK}" ]; then
@@ -76,6 +87,41 @@ if [ -f "${DEV_HOME}/.ssh/authorized_keys" ]; then
 fi
 
 mkdir -p /var/run/sshd
+
+# filebrowser's own account DB lives outside /home/dev (the directory it
+# serves) so its credentials/settings aren't part of the tree it exposes to
+# the file manager UI. Bootstrap a single admin account on first run only,
+# sharing the dev account's password — later changes made via the
+# filebrowser UI are left alone on subsequent boots.
+FILEBROWSER_DATA_DIR="/var/lib/filebrowser"
+FILEBROWSER_DB="${FILEBROWSER_DATA_DIR}/filebrowser.db"
+mkdir -p "${FILEBROWSER_DATA_DIR}"
+chown "${DEV_USER}:${DEV_USER}" "${FILEBROWSER_DATA_DIR}"
+if [ ! -f "${FILEBROWSER_DB}" ]; then
+    # filebrowser refuses passwords under 12 chars; a custom DEV_PASSWORD
+    # could be shorter. Check first — letting `users add` fail here would
+    # otherwise abort the whole entrypoint (set -e) and take sshd/ttyd/claude
+    # down with it over what's just a filebrowser-specific limitation.
+    if [ "${#ACTUAL_PASSWORD}" -lt 12 ]; then
+        log "경고: dev 비밀번호가 12자 미만이라 filebrowser 최소 비밀번호 길이(12자) 요구사항을 만족하지 못해 filebrowser 계정을 생성하지 않았습니다."
+        log "       DEV_PASSWORD를 12자 이상으로 바꿔서 컨테이너를 재생성하거나, filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
+    elif ! gosu "${DEV_USER}" filebrowser config init --database "${FILEBROWSER_DB}" --root "${DEV_HOME}" >/tmp/filebrowser-init.log 2>&1; then
+        log "경고: filebrowser 초기화에 실패했습니다 (아래 로그 참고). 웹 UI에서 직접 설정해야 할 수 있습니다."
+        cat /tmp/filebrowser-init.log
+    elif ! gosu "${DEV_USER}" filebrowser users add "${DEV_USER}" "${ACTUAL_PASSWORD}" --database "${FILEBROWSER_DB}" --perm.admin >/tmp/filebrowser-adduser.log 2>&1; then
+        log "경고: filebrowser 관리자 계정 생성에 실패했습니다 (아래 로그 참고)."
+        cat /tmp/filebrowser-adduser.log
+    else
+        log "filebrowser 관리자 계정(${DEV_USER})을 dev 계정과 동일한 비밀번호로 생성했습니다."
+    fi
+fi
+
+# ttyd only supports passing credentials as a CLI argument (-c user:pass),
+# so it's threaded through via supervisord's %(ENV_TTYD_PASSWORD)s
+# expansion. ttyd is a direct supervisord child, so a plain export here is
+# enough (unlike DISABLE_AUTOUPDATER below, it doesn't need an SSH login
+# session to see it).
+export TTYD_PASSWORD="${ACTUAL_PASSWORD}"
 
 # Only disable claude's auto-updater when a specific CLAUDE_CODE_VERSION was
 # pinned at build time (see /etc/claude-code-version-pin, written by the

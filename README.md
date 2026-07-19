@@ -4,7 +4,8 @@
 사용자로 SSH 또는 브라우저(ttyd)로 접속하며, 두 경로 모두 동일한 tmux
 세션(`main`)에 붙기 때문에 접속이 끊겨도 실행 중이던 작업이 그대로
 유지된다. `dev`는 `/var/run/docker.sock`을 통해 NAS의 Docker를 직접
-제어할 수 있다.
+제어할 수 있다. 웹 파일 매니저(filebrowser)도 포함되어 있어 `/home/dev`를
+브라우저에서 직접 관리할 수 있다.
 
 ## 요구사항
 
@@ -24,9 +25,11 @@ vi .env
 ```dotenv
 DEV_HOME_PATH=/volume1/docker/claude-code-docker/home
 DEV_SSH_HOSTKEYS_PATH=/volume1/docker/claude-code-docker/ssh-host-keys
+FILEBROWSER_DATA_PATH=/volume1/docker/claude-code-docker/filebrowser
 DEV_PASSWORD=
 SSH_PORT=2222
 TTYD_PORT=7681
+FILEBROWSER_PORT=8080
 DEV_UID=1000
 DEV_GID=1000
 ```
@@ -35,12 +38,15 @@ DEV_GID=1000
 재빌드해도 값이 흔들리지 않으므로 bind mount한 NAS 경로의 파일 소유권이
 꼬이지 않는다. NAS의 다른 계정과 UID를 맞추고 싶을 때만 바꾸면 된다.
 
-`DEV_HOME_PATH`, `DEV_SSH_HOSTKEYS_PATH`는 NAS의 실제 디렉토리 경로로,
-컨테이너의 `/home/dev`, `/etc/ssh/host_keys`에 각각 bind mount된다
+`DEV_HOME_PATH`, `DEV_SSH_HOSTKEYS_PATH`, `FILEBROWSER_DATA_PATH`는 NAS의
+실제 디렉토리 경로로, 컨테이너의 `/home/dev`, `/etc/ssh/host_keys`,
+`/var/lib/filebrowser`에 각각 bind mount된다
 (`/etc/ssh` 전체가 아니라 `host_keys` 하위 디렉토리만 마운트하는 이유는
-`sshd_config` 등 이미지에 baked-in된 나머지 설정을 가리지 않기 위함).
-디렉토리가 없으면 Docker가 자동으로 생성하고, 소유권/최초 초기화는
-컨테이너 entrypoint가 알아서 처리한다.
+`sshd_config` 등 이미지에 baked-in된 나머지 설정을 가리지 않기 위함이고,
+`FILEBROWSER_DATA_PATH`가 `/home/dev` 밖의 별도 경로인 이유는 filebrowser
+자신의 계정/설정 DB가 자신이 서빙하는 `/home/dev` 트리 안에 섞이지 않게
+하기 위함이다). 디렉토리가 없으면 Docker가 자동으로 생성하고,
+소유권/최초 초기화는 컨테이너 entrypoint가 알아서 처리한다.
 
 ## 빌드 & 실행
 
@@ -64,15 +70,35 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
   - 컨테이너 내부 `/home/dev/.initial_password`
 
 이후 실행부터는 (홈 디렉토리가 bind mount로 영속화되므로) 비밀번호를 다시
-설정하지 않는다. 비밀번호를 바꾸려면 컨테이너 안에서 `passwd`를 사용한다.
+설정하지 않는다.
 
-## 접속
+## 접속과 인증
 
-- SSH: `ssh -p ${SSH_PORT} dev@<NAS-IP>` (기본 2222)
-- 웹 터미널: `http://<NAS-IP>:${TTYD_PORT}` (기본 7681)
+- SSH: `ssh -p ${SSH_PORT} dev@<NAS-IP>` (기본 2222) — Linux 계정 인증(PAM)
+- 웹 터미널(ttyd): `http://<NAS-IP>:${TTYD_PORT}` (기본 7681) — basic auth,
+  `dev` / 위 비밀번호
+- 파일 매니저(filebrowser): `http://<NAS-IP>:${FILEBROWSER_PORT}` (기본 8080)
+  — 자체 로그인 화면, `dev` / 위 비밀번호
 
-두 경로 모두 `tmux new-session -A -s main`으로 같은 세션에 붙는다. 한쪽에서
-작업하다 연결이 끊겨도 다른 경로로 재접속하면 그대로 이어진다.
+SSH, ttyd, filebrowser 모두 **최초 실행 시 같은 비밀번호로 부트스트랩**된다.
+다만 셋은 서로 다른 별개의 계정 저장소라는 점에 주의:
+
+- SSH는 Linux 시스템 계정(`passwd`로 변경)
+- ttyd는 매 시작마다 `/home/dev/.initial_password` 값으로 `-c dev:PASSWORD`
+  인증을 다시 구성 (자체 저장소 없음)
+- filebrowser는 별도 DB(`${FILEBROWSER_DATA_PATH}`)에 자기 계정을 저장하며,
+  **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서 비밀번호를 바꾸면
+  그 이후로는 SSH/ttyd와 달라진다. filebrowser는 새 계정 비밀번호가 12자
+  미만이면 생성에 실패하므로(최소 길이 요구사항), `DEV_PASSWORD`를 짧게
+  설정하면 filebrowser 계정 부트스트랩이 건너뛰어지고 로그에 경고가 남는다
+  — 이 경우 filebrowser 자체의 quick-setup이 무작위 비밀번호로 `admin`
+  계정을 만들어주니 로그에서 확인하거나, `DEV_PASSWORD`를 12자 이상으로
+  바꿔 컨테이너를 재생성하면 된다.
+- `passwd`로 SSH 비밀번호를 나중에 바꿔도 ttyd/filebrowser에는 자동
+  반영되지 않는다.
+
+SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는다.
+한쪽에서 작업하다 연결이 끊겨도 다른 경로로 재접속하면 그대로 이어진다.
 
 ## sudo 동작
 
@@ -95,15 +121,26 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
   tmux 설정, 초기 비밀번호 파일 등)
 - `${DEV_SSH_HOSTKEYS_PATH}` → `/etc/ssh/host_keys` (SSH 호스트 키 —
   컨테이너를 재생성해도 SSH 지문이 바뀌지 않도록 함)
+- `${FILEBROWSER_DATA_PATH}` → `/var/lib/filebrowser` (filebrowser 계정/설정
+  DB — `/home/dev`와 분리되어 있음)
 
 ## 보안 참고사항
 
-- SSH는 비밀번호 인증을 허용한다. **인터넷에 직접 노출하지 말 것** —
-  NAS 방화벽/VPN 뒤에 두거나, `${DEV_HOME_PATH}/.ssh/authorized_keys`에
-  공개키를 넣어 키 기반 인증으로 전환하는 것을 권장한다.
+- SSH·ttyd·filebrowser 모두 비밀번호 인증이다. **인터넷에 직접 노출하지
+  말 것** — NAS 방화벽/VPN 뒤에 두거나, SSH는
+  `${DEV_HOME_PATH}/.ssh/authorized_keys`에 공개키를 넣어 키 기반 인증으로
+  전환하는 것을 권장한다.
 - `docker.sock` 마운트는 NAS 호스트 전체에 대한 강한 권한을 컨테이너에
   부여하는 것과 사실상 동등하다. `dev` 계정 자격증명을 신뢰할 수 있는
   사람에게만 공유할 것.
+- 여러 서비스를 Authentik 같은 SSO 뒤에 두고 운영 중이라면, ttyd와
+  filebrowser는 둘 다 HTTP 기반이라 forward-auth(리버스 프록시 +
+  Authentik Outpost)로 붙일 수 있다 — filebrowser는 `--auth.method=proxy`
+  로 프록시가 전달한 사용자명을 그대로 신뢰하는 방식까지 지원한다. SSH는
+  구조상 forward-auth 대상이 아니라서 계속 Linux 계정 비밀번호로 남는다.
+  현재 `docker-compose.yml`은 포트를 호스트에 직접 publish하므로, 이렇게
+  묶으려면 기존 Traefik/Authentik이 쓰는 Docker 네트워크에 join하고 포트
+  직접 노출은 끄는 재구성이 필요하다 (아직 미구현).
 
 ## Claude Code 실행
 

@@ -9,6 +9,7 @@ FROM debian:bookworm-slim
 
 ARG NODE_MAJOR=20
 ARG TTYD_VERSION=1.7.7
+ARG FILEBROWSER_VERSION=2.63.18
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 ARG CLAUDE_CODE_VERSION=latest
@@ -63,6 +64,20 @@ RUN set -eux; \
         "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${TTYD_ARCH}"; \
     chmod +x /usr/local/bin/ttyd
 
+# --- filebrowser (static binary; web file manager for /home/dev) --------
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) FB_ARCH=amd64 ;; \
+        arm64) FB_ARCH=arm64 ;; \
+        armhf) FB_ARCH=armv7 ;; \
+        *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/filebrowser.tar.gz \
+        "https://github.com/filebrowser/filebrowser/releases/download/v${FILEBROWSER_VERSION}/linux-${FB_ARCH}-filebrowser.tar.gz"; \
+    tar -xzf /tmp/filebrowser.tar.gz -C /usr/local/bin filebrowser; \
+    chmod +x /usr/local/bin/filebrowser; \
+    rm -f /tmp/filebrowser.tar.gz
+
 # --- dev user -------------------------------------------------------------
 # UID/GID are pinned (not left to useradd's default assignment) so that
 # ownership of bind-mounted host paths (DEV_HOME_PATH etc.) stays valid
@@ -110,6 +125,6 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22 7681
+EXPOSE 22 7681 8080
 
 ENTRYPOINT ["/entrypoint.sh"]
