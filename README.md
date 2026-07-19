@@ -113,15 +113,28 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 claude
 ```
 
-## Claude Code 버전 고정
-
-`.env`의 `CLAUDE_CODE_VERSION`으로 설치 버전을 고정할 수 있다 (기본값 `latest`).
+## 구형 커널(getrandom 미지원) 대응
 
 `@anthropic-ai/claude-code`는 2.1.113부터 `claude`가 Bun으로 컴파일된
-바이너리로 바뀌었다. 커널이 오래된 호스트(3.17 미만, 일부 구형 시놀로지
-NAS 등)에서는 Bun의 `getrandom()` 사용 때문에 `panic: getrandom failed`로
-크래시가 날 수 있다. 2.1.112 이하는 순수 Node.js 스크립트라 이 문제가
-없으므로, 그런 환경에서는 다음처럼 고정해서 빌드해본다:
+바이너리로 바뀌었다. Bun은 내부적으로 `getrandom(2)`를 쓰는데, 이 syscall은
+Linux 3.17부터 생겨서, 커널이 그보다 오래된 호스트(일부 구형 시놀로지 NAS
+등, DSM 버전과 무관하게 플랫폼별로 커널이 3.10.x에 머물러 있는 경우가 있다)
+에서는 `panic: getrandom failed: errno 38`로 크래시가 난다.
+
+**기본 해결책: LD_PRELOAD 셔임 (`getrandom_shim.c`)**
+
+이미지 빌드 시 자동으로 컴파일되어 `/usr/local/lib/getrandom_shim.so`로
+설치되고, `LD_PRELOAD` 환경변수로 이미지에 항상 적용된다. libc의 `syscall()`
+호출을 가로채서 `getrandom`이 `ENOSYS`로 실패하면 `/dev/urandom`을 직접
+읽어 대신 반환한다. 정상 커널에서는 실제 syscall이 그대로 성공하므로
+완전히 무해한 passthrough다 — 별도 설정 없이 항상 켜져 있다.
+
+**대안: 구버전으로 고정**
+
+셔임으로도 안 될 경우를 대비한 대안으로, `.env`의 `CLAUDE_CODE_VERSION`으로
+설치 버전을 2.1.112 이하로 고정하면 애초에 Bun을 쓰지 않는 순수 Node.js
+스크립트 버전이 설치된다 (기능/버그 수정 3개월치를 포기하는 대신 확실하게
+우회):
 
 ```dotenv
 CLAUDE_CODE_VERSION=2.1.112

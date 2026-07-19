@@ -1,3 +1,10 @@
+# --- builder stage: compile the getrandom LD_PRELOAD shim -----------------
+FROM debian:bookworm-slim AS shim-builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY getrandom_shim.c /tmp/getrandom_shim.c
+RUN gcc -shared -fPIC -O2 -o /getrandom_shim.so /tmp/getrandom_shim.c -ldl
+
 FROM debian:bookworm-slim
 
 ARG NODE_MAJOR=20
@@ -93,6 +100,14 @@ RUN rm -f /etc/ssh/ssh_host_* \
     'HostKey /etc/ssh/host_keys/ssh_host_ecdsa_key' \
     'HostKey /etc/ssh/host_keys/ssh_host_ed25519_key' \
     > /etc/ssh/sshd_config.d/dev.conf
+
+COPY --from=shim-builder /getrandom_shim.so /usr/local/lib/getrandom_shim.so
+# Works around Bun's getrandom() crash on kernels < 3.17 (see
+# getrandom_shim.c). A no-op passthrough on kernels that do have
+# getrandom(2), so this is safe to leave on unconditionally. Set only after
+# the .so is copied in, so earlier RUN steps don't warn about a missing
+# preload target.
+ENV LD_PRELOAD=/usr/local/lib/getrandom_shim.so
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
