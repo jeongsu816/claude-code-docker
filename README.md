@@ -112,3 +112,22 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 ```bash
 claude
 ```
+
+## Claude Code 버전 고정
+
+`.env`의 `CLAUDE_CODE_VERSION`으로 설치 버전을 고정할 수 있다 (기본값 `latest`).
+
+`@anthropic-ai/claude-code`는 2.1.113부터 `claude`가 Bun으로 컴파일된
+바이너리로 바뀌었다. 커널이 오래된 호스트(3.17 미만, 일부 구형 시놀로지
+NAS 등)에서는 Bun의 `getrandom()` 사용 때문에 `panic: getrandom failed`로
+크래시가 날 수 있다. 2.1.112 이하는 순수 Node.js 스크립트라 이 문제가
+없으므로, 그런 환경에서는 다음처럼 고정해서 빌드해본다:
+
+```dotenv
+CLAUDE_CODE_VERSION=2.1.112
+```
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```

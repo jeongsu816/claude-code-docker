@@ -4,6 +4,7 @@ ARG NODE_MAJOR=20
 ARG TTYD_VERSION=1.7.7
 ARG DEV_UID=1000
 ARG DEV_GID=1000
+ARG CLAUDE_CODE_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -32,10 +33,13 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Node.js + Claude Code CLI ------------------------------------------
+# CLAUDE_CODE_VERSION defaults to latest; pin it (e.g. 2.1.112) to test/use a
+# version predating the Bun-compiled binary switch (2.1.113+), which is
+# useful on hosts with a kernel too old for Bun's getrandom() usage.
 RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code \
+    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm cache clean --force
 
 # --- ttyd (static binary; not packaged for Debian bookworm) -------------

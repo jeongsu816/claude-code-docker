@@ -5,6 +5,7 @@ services:
       args:
         DEV_UID: ${DEV_UID:-1000}
         DEV_GID: ${DEV_GID:-1000}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
     image: claude-code-docker:latest
     container_name: claude-code-docker
     hostname: ${DEV_HOSTNAME:-claude-code-docker}
