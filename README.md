@@ -101,6 +101,15 @@ SSH, ttyd, filebrowser 모두 **최초 실행 시 같은 비밀번호로 부트�
 SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는다.
 한쪽에서 작업하다 연결이 끊겨도 다른 경로로 재접속하면 그대로 이어진다.
 
+같은 세션 안에서 창(window)을 여러 개 두고 전환할 수 있어서, 예를 들어
+한 창에서 `claude`를 실행해두고 다른 창에서 별도 작업을 할 수 있다:
+
+- `Ctrl-b c` — 새 창 생성
+- `Ctrl-b n` / `Ctrl-b p` — 다음/이전 창으로 전환
+- `Ctrl-b 0`~`9` — 번호로 바로 이동
+- `Ctrl-b w` — 창 목록 보고 선택
+- `Ctrl-b %` / `Ctrl-b "` — 세로/가로 pane 분할 (한 화면에 여러 창 동시에 보기)
+
 ## sudo 동작
 
 `dev`는 `sudo` 그룹에 속하지만 **NOPASSWD 설정은 없다** — `sudo` 실행 시
