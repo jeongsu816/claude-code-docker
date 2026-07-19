@@ -169,6 +169,32 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
 claude
 ```
 
+## 개발 툴체인
+
+claude가 이 컨테이너 안에서 실제로 빌드/실행까지 하는 개발 용도이므로,
+언어별 도구가 기본으로 들어있다:
+
+- **C/C++**: `gcc`/`g++`/`make`/`cmake`/`gdb`/`pkg-config` — 이미지에
+  시스템 전역으로 설치되어 있어 sudo 없이 바로 쓸 수 있다.
+- **Node.js**: [nvm](https://github.com/nvm-sh/nvm) — `nvm install <버전>`으로
+  프로젝트별 버전을 root 권한 없이 설치/전환한다. 기본으로 미리 설치된
+  Node 버전은 없다(어떤 프로젝트든 맞는 버전을 그때그때 설치).
+- **Python**: [pyenv](https://github.com/pyenv/pyenv) — `pyenv install <버전>`도
+  마찬가지로 root 권한 없이 동작한다.
+
+nvm/pyenv는 `dev`의 홈 디렉토리(`$HOME/.nvm`, `$HOME/.pyenv`) 안에 설치되고
+`.bashrc`에서 자동으로 로드되므로, **인터랙티브 셸(SSH/ttyd로 접속해
+tmux 세션 안에 들어온 상태)에서만** 잡힌다 — `ssh host "명령어"`처럼
+비대화형으로 원격 명령만 실행하는 경우에는 `.bashrc`가 로드되지 않아
+`nvm`/`pyenv` 명령을 못 찾는다(nvm/pyenv 자체의 일반적인 제약사항이며 이
+컨테이너만의 문제는 아니다).
+
+새 이미지를 빌드해도 **이미 이전에 한 번 실행한 적 있는 기존
+`DEV_HOME_PATH`에는 자동으로 반영되지 않는다** — `entrypoint.sh`는
+`.bashrc`가 이미 있으면(= 최초 실행이 아니면) `/etc/skel` 시딩을 건너뛰기
+때문이다. 이미 운영 중인 홈 디렉토리에 nvm/pyenv를 추가하려면 수동으로
+옮겨야 한다.
+
 ## 구형 커널(getrandom 미지원) 대응
 
 `@anthropic-ai/claude-code`는 2.1.113부터 `claude`가 Bun으로 컴파일된

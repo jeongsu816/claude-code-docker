@@ -10,6 +10,8 @@ FROM debian:bookworm-slim
 ARG NODE_MAJOR=20
 ARG TTYD_VERSION=1.7.7
 ARG FILEBROWSER_VERSION=2.63.18
+ARG NVM_VERSION=0.40.6
+ARG PYENV_VERSION=v2.8.1
 ARG DEV_UID=1000
 ARG DEV_GID=1000
 ARG CLAUDE_CODE_VERSION=latest
@@ -17,6 +19,12 @@ ARG CLAUDE_CODE_VERSION=latest
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- base packages ------------------------------------------------------
+# build-essential/gdb/cmake/pkg-config: baked-in C/C++ toolchain (no
+# per-project version needed, unlike Node/Python below, so no reason to make
+# this a user-space/no-sudo-required install).
+# The libssl-dev..liblzma-dev block is pyenv's own documented "suggested
+# build environment" for Debian/Ubuntu — without these, `pyenv install`
+# either fails outright or silently produces a Python missing ssl/sqlite3/etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo \
         openssh-server \
@@ -28,6 +36,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         supervisor \
         gosu \
+        build-essential \
+        gdb \
+        cmake \
+        pkg-config \
+        libssl-dev \
+        zlib1g-dev \
+        libbz2-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libncursesw5-dev \
+        xz-utils \
+        tk-dev \
+        libxml2-dev \
+        libxmlsec1-dev \
+        libffi-dev \
+        liblzma-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Docker CLI (client only; talks to the host's docker.sock) ---------
@@ -96,6 +120,33 @@ RUN printf '%s\n' \
     && echo 'dev ALL=(ALL:ALL) ALL' > /etc/sudoers.d/dev \
     && chmod 440 /etc/sudoers.d/dev \
     && visudo -cf /etc/sudoers.d/dev
+
+# --- nvm/pyenv (user-space, no sudo needed) --------------------------------
+# Installed under /etc/skel so entrypoint.sh's first-run `cp -rn /etc/skel/.`
+# seeding carries them into /home/dev automatically, same as the tmux
+# .bashrc snippet above. Deliberately not baked in as a system-wide Node/
+# Python the way build-essential is for C/C++ above: the whole point is
+# picking a version per project without ever needing root, which nvm/pyenv
+# both do by installing entirely under $HOME. No default Node/Python version
+# is pre-installed here — that would fix a version that may not match
+# whatever a given project actually needs; `nvm install`/`pyenv install` pull
+# one on demand.
+RUN mkdir -p /etc/skel/.nvm \
+    && NVM_DIR=/etc/skel/.nvm PROFILE=/dev/null \
+       bash -c "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_VERSION}/install.sh | bash" \
+    && git clone --branch "${PYENV_VERSION}" --depth 1 https://github.com/pyenv/pyenv.git /etc/skel/.pyenv \
+    && printf '%s\n' \
+        '' \
+        '# --- claude-code-docker: nvm ---' \
+        'export NVM_DIR="$HOME/.nvm"' \
+        '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' \
+        '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' \
+        '' \
+        '# --- claude-code-docker: pyenv ---' \
+        'export PYENV_ROOT="$HOME/.pyenv"' \
+        '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' \
+        'eval "$(pyenv init -)"' \
+        >> /etc/skel/.bashrc
 
 # --- SSH server hardening -------------------------------------------------
 # Host keys live under /etc/ssh/host_keys so that path alone can be bind
