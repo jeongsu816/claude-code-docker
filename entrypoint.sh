@@ -137,10 +137,11 @@ FILEBROWSER_DB="${FILEBROWSER_DATA_DIR}/filebrowser.db"
 mkdir -p "${FILEBROWSER_DATA_DIR}"
 chown "${DEV_USER}:${DEV_USER}" "${FILEBROWSER_DATA_DIR}"
 if [ ! -f "${FILEBROWSER_DB}" ]; then
-    # filebrowser refuses passwords under 12 chars; a custom DEV_PASSWORD
-    # could be shorter. Check first — letting `users add` fail here would
-    # otherwise abort the whole entrypoint (set -e) and take sshd/ttyd/claude
-    # down with it over what's just a filebrowser-specific limitation.
+    # filebrowser's own default minimum password length is 12, but that's
+    # just Settings.MinimumPasswordLength (a DB-stored value, not hardcoded
+    # into the binary) — lowered to 8 via --minimumPasswordLength on config
+    # init below, to match this project's own random-password length and
+    # not force DEV_PASSWORD to be longer than it needs to be.
     # ACTUAL_PASSWORD is only ever non-empty on the one boot where the
     # password hash was just (re)created above — if this DB is missing on
     # any other boot (e.g. someone deleted just FILEBROWSER_DATA_PATH), the
@@ -148,10 +149,10 @@ if [ ! -f "${FILEBROWSER_DB}" ]; then
     if [ -z "${ACTUAL_PASSWORD}" ]; then
         log "경고: filebrowser 계정이 없는데 평문 비밀번호를 보관하지 않아 자동으로 만들 수 없습니다."
         log "       filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
-    elif [ "${#ACTUAL_PASSWORD}" -lt 12 ]; then
-        log "경고: dev 비밀번호가 12자 미만이라 filebrowser 최소 비밀번호 길이(12자) 요구사항을 만족하지 못해 filebrowser 계정을 생성하지 않았습니다."
-        log "       DEV_PASSWORD를 12자 이상으로 바꿔서 컨테이너를 재생성하거나, filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
-    elif ! gosu "${DEV_USER}" filebrowser config init --database "${FILEBROWSER_DB}" --root "${DEV_HOME}" >/tmp/filebrowser-init.log 2>&1; then
+    elif [ "${#ACTUAL_PASSWORD}" -lt 8 ]; then
+        log "경고: dev 비밀번호가 8자 미만이라 filebrowser 최소 비밀번호 길이(8자) 요구사항을 만족하지 못해 filebrowser 계정을 생성하지 않았습니다."
+        log "       DEV_PASSWORD를 8자 이상으로 바꿔서 컨테이너를 재생성하거나, filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
+    elif ! gosu "${DEV_USER}" filebrowser config init --database "${FILEBROWSER_DB}" --root "${DEV_HOME}" --minimumPasswordLength 8 >/tmp/filebrowser-init.log 2>&1; then
         log "경고: filebrowser 초기화에 실패했습니다 (아래 로그 참고). 웹 UI에서 직접 설정해야 할 수 있습니다."
         cat /tmp/filebrowser-init.log
     elif ! gosu "${DEV_USER}" filebrowser users add "${DEV_USER}" "${ACTUAL_PASSWORD}" --database "${FILEBROWSER_DB}" --perm.admin >/tmp/filebrowser-adduser.log 2>&1; then

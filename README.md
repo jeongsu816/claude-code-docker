@@ -114,12 +114,15 @@ SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩
 - SSH는 Linux 시스템 계정(`passwd`로 변경)
 - filebrowser는 별도 DB(`${FILEBROWSER_DATA_PATH}`)에 자기 계정을 저장하며,
   **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서 비밀번호를 바꾸면
-  그 이후로는 SSH와 달라진다. filebrowser는 새 계정 비밀번호가 12자
-  미만이면 생성에 실패하므로(최소 길이 요구사항), `DEV_PASSWORD`를 짧게
-  설정하면 filebrowser 계정 부트스트랩이 건너뛰어지고 로그에 경고가 남는다
-  — 이 경우 filebrowser 자체의 quick-setup이 무작위 비밀번호로 `admin`
-  계정을 만들어주니 로그에서 확인하거나, `DEV_PASSWORD`를 12자 이상으로
-  바꿔 컨테이너를 재생성하면 된다.
+  그 이후로는 SSH와 달라진다. filebrowser 기본 최소 비밀번호 길이는 12자지만,
+  `filebrowser config init --minimumPasswordLength 8`로 8자로 낮춰뒀다
+  (하드코딩된 제약이 아니라 filebrowser 자체 설정값이다). 그래도
+  `DEV_PASSWORD`가 8자 미만이면 filebrowser 계정 부트스트랩이 건너뛰어지고
+  로그에 경고가 남는다 — 이 경우 filebrowser 자체의 quick-setup이 무작위
+  비밀번호로 `admin` 계정을 만들어주니 로그에서 확인하거나, `DEV_PASSWORD`를
+  8자 이상으로 바꿔 컨테이너를 재생성하면 된다. (filebrowser는 흔한
+  비밀번호 목록도 따로 걸러내므로, 짧더라도 너무 단순한 값은 여전히
+  거부될 수 있다.)
 - `passwd`로 SSH 비밀번호를 나중에 바꿔도 filebrowser에는 자동
   반영되지 않는다.
 
