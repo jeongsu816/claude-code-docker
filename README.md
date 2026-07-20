@@ -62,6 +62,11 @@ NAS가 ARM 아키텍처라면 buildx로 해당 아키텍처를 지정해서 빌�
 docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 ```
 
+네트워크는 compose가 프로젝트 전용으로 새로 만드는 네트워크가 아니라
+`network_mode: bridge`로 도커의 기본 `bridge` 네트워크를 그대로 쓴다 —
+시놀로지 Container Manager로 띄운 다른 컨테이너들과 같은 네트워크에 있어야
+나중에 "링크" 기능이나 Authentik 연동을 붙이기 쉽기 때문이다.
+
 ## 최초 비밀번호 확인
 
 `dev` 계정의 sudo/로그인 비밀번호는 최초 실행 시 자동으로 설정된다.

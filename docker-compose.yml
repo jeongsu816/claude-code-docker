@@ -24,3 +24,11 @@ services:
       # 지정하지 않으면 컨테이너 최초 실행 시 무작위 비밀번호가 생성되어
       # `docker logs claude-code-docker` 에 출력됩니다.
       DEV_PASSWORD: ${DEV_PASSWORD:-}
+    # compose가 프로젝트 전용 네트워크(claude-code-docker_default)를 새로
+    # 만들지 않고, Container Manager의 다른 컨테이너들과 같은 도커 기본
+    # bridge 네트워크에 바로 붙도록 지정. `networks: [default]` +
+    # `networks.default.external: true` 방식은 도커 기본 bridge 네트워크가
+    # 컨테이너 별칭(alias)을 지원하지 않아서 실패한다 ("network-scoped
+    # aliases are only supported for user-defined networks") — 반드시
+    # network_mode로 지정해야 한다.
+    network_mode: bridge
