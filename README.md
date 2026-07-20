@@ -27,6 +27,7 @@ vi .env
 DEV_HOME_PATH=/volume1/docker/claude-code-docker/home
 DEV_SSH_HOSTKEYS_PATH=/volume1/docker/claude-code-docker/ssh-host-keys
 FILEBROWSER_DATA_PATH=/volume1/docker/claude-code-docker/filebrowser
+DEV_SECRETS_PATH=/volume1/docker/claude-code-docker/secrets
 DEV_PASSWORD=
 SSH_PORT=2222
 TTYD_PORT=7681
@@ -39,15 +40,15 @@ DEV_GID=1000
 재빌드해도 값이 흔들리지 않으므로 bind mount한 NAS 경로의 파일 소유권이
 꼬이지 않는다. NAS의 다른 계정과 UID를 맞추고 싶을 때만 바꾸면 된다.
 
-`DEV_HOME_PATH`, `DEV_SSH_HOSTKEYS_PATH`, `FILEBROWSER_DATA_PATH`는 NAS의
-실제 디렉토리 경로로, 컨테이너의 `/home/dev`, `/etc/ssh/host_keys`,
-`/var/lib/filebrowser`에 각각 bind mount된다
-(`/etc/ssh` 전체가 아니라 `host_keys` 하위 디렉토리만 마운트하는 이유는
-`sshd_config` 등 이미지에 baked-in된 나머지 설정을 가리지 않기 위함이고,
-`FILEBROWSER_DATA_PATH`가 `/home/dev` 밖의 별도 경로인 이유는 filebrowser
-자신의 계정/설정 DB가 자신이 서빙하는 `/home/dev` 트리 안에 섞이지 않게
-하기 위함이다). 디렉토리가 없으면 Docker가 자동으로 생성하고,
-소유권/최초 초기화는 컨테이너 entrypoint가 알아서 처리한다.
+`DEV_HOME_PATH`, `DEV_SSH_HOSTKEYS_PATH`, `FILEBROWSER_DATA_PATH`,
+`DEV_SECRETS_PATH`는 NAS의 실제 디렉토리 경로로, 컨테이너의 `/home/dev`,
+`/etc/ssh/host_keys`, `/var/lib/filebrowser`, `/var/lib/claude-code-docker`에
+각각 bind mount된다. 뒤의 세 개가 `/home/dev` 밖의 별도 경로인 이유는 모두
+같다 — filebrowser가 정확히 `/home/dev`를 그대로 서빙하기 때문에, 그
+트리 안에 두면 안 되는 것들(SSH 호스트 키, filebrowser 자신의 계정 DB,
+`dev` 계정의 평문 비밀번호가 담긴 `.initial_password`)을 전부 밖으로 뺀
+것이다. 디렉토리가 없으면 Docker가 자동으로 생성하고, 소유권/최초 초기화는
+컨테이너 entrypoint가 알아서 처리한다.
 
 ## 빌드 & 실행
 
@@ -68,34 +69,46 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 - `.env`의 `DEV_PASSWORD`에 값을 채워두면 그 값이 사용된다.
 - 비워두면 무작위 비밀번호가 생성되어 다음 두 곳에 남는다:
   - `docker logs claude-code-docker`
-  - 컨테이너 내부 `/home/dev/.initial_password`
+  - 컨테이너 내부 `/var/lib/claude-code-docker/.initial_password`
+    (`/home/dev` 밖에 있다 — filebrowser가 서빙하는 트리에 평문 비밀번호가
+    노출되지 않도록 일부러 분리해뒀다. 아래 "접속과 인증" 참고)
 
-이후 실행부터는 (홈 디렉토리가 bind mount로 영속화되므로) 비밀번호를 다시
-설정하지 않는다.
+이후 실행부터는 (홈 디렉토리가 bind mount로 영속화되므로) `.env`의
+`DEV_PASSWORD` 값이 바뀌어도 새로 반영하지 않고 항상 최초에 정해진 값을
+그대로 유지한다 — 다만 그 값 자체는 컨테이너를 재생성해도(재빌드, `down`
+후 `up` 등) 매번 다시 적용되므로 SSH/sudo 비밀번호가 풀리는 일은 없다.
 
 ## 접속과 인증
 
 - SSH: `ssh -p ${SSH_PORT} dev@<NAS-IP>` (기본 2222) — Linux 계정 인증(PAM)
-- 웹 터미널(ttyd): `http://<NAS-IP>:${TTYD_PORT}` (기본 7681) — basic auth,
-  `dev` / 위 비밀번호
+- 웹 터미널(ttyd): `http://<NAS-IP>:${TTYD_PORT}` (기본 7681) — **인증 없음.**
+  접속하면 곧바로 `dev` 계정 tmux 세션으로 들어간다.
 - 파일 매니저(filebrowser): `http://<NAS-IP>:${FILEBROWSER_PORT}` (기본 8080)
   — 자체 로그인 화면, `dev` / 위 비밀번호
 
-SSH, ttyd, filebrowser 모두 **최초 실행 시 같은 비밀번호로 부트스트랩**된다.
-다만 셋은 서로 다른 별개의 계정 저장소라는 점에 주의:
+> **ttyd는 자체 인증이 없다.** `TTYD_PORT`에 네트워크로 닿을 수 있는 사람은
+> 누구나 비밀번호 없이 `dev` 셸을 그대로 얻는다. 원래는 ttyd가 매 시작마다
+> `-c dev:PASSWORD`로 basic auth를 재구성했는데, 그러려면 평문 비밀번호를
+> 컨테이너 안에 계속 저장해둬야 했고 그 파일이 `/home/dev`(filebrowser가
+> 서빙하는 트리) 안에 있어서 별도 문제가 있었다. 지금은 그 인증 자체를
+> 뺐다 — **`TTYD_PORT`를 신뢰할 수 없는 네트워크(인터넷 등)에 노출하면
+> 절대 안 된다.** NAS 방화벽/VPN 뒤에 두거나, 나중에 Authentik 같은
+> forward-auth를 앞단에 붙이는 것을 전제로 한다 (아래 "보안 참고사항"
+> 참고, 아직 미구현).
+
+SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩**된다. 다만
+둘은 서로 다른 별개의 계정 저장소라는 점에 주의:
 
 - SSH는 Linux 시스템 계정(`passwd`로 변경)
-- ttyd는 매 시작마다 `/home/dev/.initial_password` 값으로 `-c dev:PASSWORD`
-  인증을 다시 구성 (자체 저장소 없음)
 - filebrowser는 별도 DB(`${FILEBROWSER_DATA_PATH}`)에 자기 계정을 저장하며,
   **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서 비밀번호를 바꾸면
-  그 이후로는 SSH/ttyd와 달라진다. filebrowser는 새 계정 비밀번호가 12자
+  그 이후로는 SSH와 달라진다. filebrowser는 새 계정 비밀번호가 12자
   미만이면 생성에 실패하므로(최소 길이 요구사항), `DEV_PASSWORD`를 짧게
   설정하면 filebrowser 계정 부트스트랩이 건너뛰어지고 로그에 경고가 남는다
   — 이 경우 filebrowser 자체의 quick-setup이 무작위 비밀번호로 `admin`
   계정을 만들어주니 로그에서 확인하거나, `DEV_PASSWORD`를 12자 이상으로
   바꿔 컨테이너를 재생성하면 된다.
-- `passwd`로 SSH 비밀번호를 나중에 바꿔도 ttyd/filebrowser에는 자동
+- `passwd`로 SSH 비밀번호를 나중에 바꿔도 filebrowser에는 자동
   반영되지 않는다.
 
 SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는다.
@@ -140,11 +153,16 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
   컨테이너를 재생성해도 SSH 지문이 바뀌지 않도록 함)
 - `${FILEBROWSER_DATA_PATH}` → `/var/lib/filebrowser` (filebrowser 계정/설정
   DB — `/home/dev`와 분리되어 있음)
+- `${DEV_SECRETS_PATH}` → `/var/lib/claude-code-docker` (`dev` 계정의 평문
+  비밀번호가 담긴 `.initial_password` — 역시 `/home/dev`와 분리되어 있음)
 
 ## 보안 참고사항
 
-- SSH·ttyd·filebrowser 모두 비밀번호 인증이다. **인터넷에 직접 노출하지
-  말 것** — NAS 방화벽/VPN 뒤에 두거나, SSH는
+- **ttyd는 인증이 전혀 없다.** `TTYD_PORT`는 반드시 NAS 방화벽/VPN 뒤에만
+  둘 것 — 인터넷은 물론 신뢰하지 않는 내부망에도 노출하면 안 된다. 이
+  포트에 닿을 수 있는 사람은 곧바로 `dev` 셸을 얻는다.
+- SSH·filebrowser는 비밀번호 인증이다. 이것도 인터넷에 직접 노출하지 말고
+  NAS 방화벽/VPN 뒤에 두거나, SSH는
   `${DEV_HOME_PATH}/.ssh/authorized_keys`에 공개키를 넣어 키 기반 인증으로
   전환하는 것을 권장한다.
 - `docker.sock` 마운트는 NAS 호스트 전체에 대한 강한 권한을 컨테이너에
@@ -155,11 +173,14 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
 - 여러 서비스를 Authentik 같은 SSO 뒤에 두고 운영 중이라면, ttyd와
   filebrowser는 둘 다 HTTP 기반이라 forward-auth(리버스 프록시 +
   Authentik Outpost)로 붙일 수 있다 — filebrowser는 `--auth.method=proxy`
-  로 프록시가 전달한 사용자명을 그대로 신뢰하는 방식까지 지원한다. SSH는
-  구조상 forward-auth 대상이 아니라서 계속 Linux 계정 비밀번호로 남는다.
-  현재 `docker-compose.yml`은 포트를 호스트에 직접 publish하므로, 이렇게
-  묶으려면 기존 Traefik/Authentik이 쓰는 Docker 네트워크에 join하고 포트
-  직접 노출은 끄는 재구성이 필요하다 (아직 미구현).
+  로 프록시가 전달한 사용자명을 그대로 신뢰하는 방식까지 지원하고, ttyd는
+  지금 자체 인증이 아예 없으므로 forward-auth가 사실상 유일한 접근 통제
+  수단이 된다. SSH는 구조상 forward-auth 대상이 아니라서 계속 Linux 계정
+  비밀번호로 남는다. 현재 `docker-compose.yml`은 포트를 호스트에 직접
+  publish하므로, 이렇게 묶으려면 기존 Traefik/Authentik이 쓰는 Docker
+  네트워크에 join하고 포트 직접 노출은 끄는 재구성이 필요하다 (아직
+  미구현 — Authentik을 실제로 붙이기 전까지는 `TTYD_PORT`를 신뢰할 수
+  있는 네트워크 밖으로 노출하지 말 것).
 
 ## Claude Code 실행
 

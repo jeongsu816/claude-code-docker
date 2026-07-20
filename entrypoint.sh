@@ -3,12 +3,38 @@ set -euo pipefail
 
 DEV_USER="dev"
 DEV_HOME="/home/${DEV_USER}"
-MARKER="${DEV_HOME}/.container_setup_done"
 DOCKER_SOCK="/var/run/docker.sock"
+
+# Kept outside /home/dev deliberately: filebrowser serves that whole tree
+# (--root /home/dev), so anything under it is browsable/downloadable through
+# the file manager UI. .initial_password holds the dev account's plaintext
+# password — still needed every boot to re-apply chpasswd (see below), since
+# /etc/shadow doesn't survive container recreation. Leaving it inside
+# /home/dev meant anyone with filebrowser access (even via a filebrowser-only
+# password that had since drifted from the real one) could read it and get
+# the SSH/sudo password too, defeating the "independent credential stores"
+# design.
+DEV_STATE_DIR="/var/lib/claude-code-docker"
+MARKER="${DEV_STATE_DIR}/.container_setup_done"
+INITIAL_PASSWORD_FILE="${DEV_STATE_DIR}/.initial_password"
+LEGACY_MARKER="${DEV_HOME}/.container_setup_done"
+LEGACY_INITIAL_PASSWORD_FILE="${DEV_HOME}/.initial_password"
 
 log() {
     echo "[entrypoint] $*"
 }
+
+mkdir -p "${DEV_STATE_DIR}"
+# One-time migration for containers set up before this file moved out of
+# /home/dev. `mv`, not copy, so the old filebrowser-exposed copy doesn't
+# linger alongside the new one.
+if [ -f "${LEGACY_INITIAL_PASSWORD_FILE}" ] && [ ! -f "${INITIAL_PASSWORD_FILE}" ]; then
+    mv "${LEGACY_INITIAL_PASSWORD_FILE}" "${INITIAL_PASSWORD_FILE}"
+    log "기존 ${LEGACY_INITIAL_PASSWORD_FILE} 를 ${INITIAL_PASSWORD_FILE} 로 이전했습니다 (filebrowser가 서빙하는 /home/dev 밖으로)."
+fi
+if [ -f "${LEGACY_MARKER}" ] && [ ! -f "${MARKER}" ]; then
+    mv "${LEGACY_MARKER}" "${MARKER}"
+fi
 
 # The home directory is typically bind-mounted from the host, so unlike a
 # named volume Docker does NOT seed it from the image on first use. Populate
@@ -23,11 +49,11 @@ else
 fi
 
 # Resolve the dev account's actual current password on every boot (not just
-# first run), since ttyd and filebrowser auth below need it every time
-# supervisord (re)starts them. .initial_password is the single source of
-# truth for this once set — NOT re-derived from DEV_PASSWORD on every boot,
-# because that env var could be changed or dropped from .env later while the
-# Linux password (set once, on first run) stays whatever it was.
+# first run), since chpasswd and filebrowser auth below need it every time.
+# .initial_password is the single source of truth for this once set — NOT
+# re-derived from DEV_PASSWORD on every boot, because that env var could be
+# changed or dropped from .env later while the Linux password (set once, on
+# first run) stays whatever it was.
 if [ ! -f "${MARKER}" ]; then
     if [ -n "${DEV_PASSWORD:-}" ]; then
         ACTUAL_PASSWORD="${DEV_PASSWORD}"
@@ -42,21 +68,26 @@ if [ ! -f "${MARKER}" ]; then
         log "=============================================="
         log " dev 계정 초기 비밀번호가 자동 생성되었습니다:"
         log " ${ACTUAL_PASSWORD}"
-        log " (이 값은 ${DEV_HOME}/.initial_password 에도 저장됩니다)"
+        log " (이 값은 ${INITIAL_PASSWORD_FILE} 에도 저장됩니다)"
         log "=============================================="
     fi
-    echo "${DEV_USER}:${ACTUAL_PASSWORD}" | chpasswd
     # Always persisted (even when it came from DEV_PASSWORD), so subsequent
     # boots have a reliable value to read back regardless of what .env says
     # by then.
-    printf '%s\n' "${ACTUAL_PASSWORD}" >"${DEV_HOME}/.initial_password"
-    chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.initial_password"
-    chmod 600 "${DEV_HOME}/.initial_password"
+    printf '%s\n' "${ACTUAL_PASSWORD}" >"${INITIAL_PASSWORD_FILE}"
+    chown "${DEV_USER}:${DEV_USER}" "${INITIAL_PASSWORD_FILE}"
+    chmod 600 "${INITIAL_PASSWORD_FILE}"
     touch "${MARKER}"
-    chown "${DEV_USER}:${DEV_USER}" "${MARKER}"
 else
-    ACTUAL_PASSWORD="$(cat "${DEV_HOME}/.initial_password")"
+    ACTUAL_PASSWORD="$(cat "${INITIAL_PASSWORD_FILE}")"
 fi
+# Applied every boot, not just first run: /etc/shadow lives in the
+# container's own filesystem, not a bind mount, so it does NOT survive
+# container recreation (docker compose down/up, image rebuild, etc.) the way
+# the paths above do. Without re-applying this every time, a recreated
+# container would silently leave `dev` with no usable Linux password even
+# though .initial_password/filebrowser still have the right value.
+echo "${DEV_USER}:${ACTUAL_PASSWORD}" | chpasswd
 
 # Deliberately NOT adding dev to the socket's group here. docker.sock access
 # is equivalent to unrestricted root on the NAS host, and dev's sudo already
@@ -118,13 +149,6 @@ if [ ! -f "${FILEBROWSER_DB}" ]; then
         log "filebrowser 관리자 계정(${DEV_USER})을 dev 계정과 동일한 비밀번호로 생성했습니다."
     fi
 fi
-
-# ttyd only supports passing credentials as a CLI argument (-c user:pass),
-# so it's threaded through via supervisord's %(ENV_TTYD_PASSWORD)s
-# expansion. ttyd is a direct supervisord child, so a plain export here is
-# enough (unlike DISABLE_AUTOUPDATER below, it doesn't need an SSH login
-# session to see it).
-export TTYD_PASSWORD="${ACTUAL_PASSWORD}"
 
 # Only disable claude's auto-updater when a specific CLAUDE_CODE_VERSION was
 # pinned at build time (see /etc/claude-code-version-pin, written by the
