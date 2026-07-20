@@ -7,7 +7,6 @@ RUN gcc -shared -fPIC -O2 -o /getrandom_shim.so /tmp/getrandom_shim.c -ldl
 
 FROM debian:bookworm-slim
 
-ARG NODE_MAJOR=20
 ARG TTYD_VERSION=1.7.7
 ARG FILEBROWSER_VERSION=2.63.18
 ARG NVM_VERSION=0.40.6
@@ -65,16 +64,42 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Node.js + Claude Code CLI ------------------------------------------
+# --- Claude Code CLI (Anthropic's native installer, not npm) --------------
 # CLAUDE_CODE_VERSION defaults to latest and is left free to self-update at
 # runtime (claude's built-in auto-updater). Setting it to a specific version
 # instead pins that version — entrypoint.sh reads the marker file below and
 # disables the auto-updater only in that case, so a pin actually sticks.
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm cache clean --force \
+#
+# An earlier version of this installed via `npm install -g` (which needed
+# Node.js as a system apt package just for this). Reading the actual
+# claude.exe binary's own strings (`strings` on the extracted npm package)
+# showed it recognizes multiple install methods on its own — npm-global,
+# npm-local, and a separate "native" method — and its own bundled guidance
+# explicitly nudges npm-local installs toward switching to native
+# (`Consider using native installation: \`claude install\``). The native
+# installer (claude.ai/install.sh) needs no Node/npm at all — pure
+# curl+bash, self-contained — so this drops the whole Node.js apt dependency
+# in favor of it.
+#
+# Installed with HOME=/etc/skel (root, at build time) so it lands under
+# /etc/skel/.local and /etc/skel/.claude, following the same pattern already
+# used for nvm/pyenv: entrypoint.sh's first-run `cp -rn /etc/skel/.
+# /home/dev/` carries it into /home/dev, genuinely dev-owned via the normal
+# home-directory ownership path — no npm prefix, no /usr involvement, no
+# write-permission workaround needed at all for the auto-updater to do its
+# job. The installer bakes an *absolute* symlink
+# (~/.local/bin/claude -> $HOME/.local/share/claude/versions/<version>)
+# pointing at whatever $HOME was at install time — since that's /etc/skel
+# here, it's always wrong once copied into /home/dev. entrypoint.sh fixes
+# this up as a relative symlink instead (see there), which resolves
+# correctly regardless of what $HOME actually is at runtime. Also see
+# entrypoint.sh for the per-boot migration check that backfills this into
+# *already*-bootstrapped homes (unlike nvm/pyenv, which only reaches
+# brand-new ones) — this one's core functionality, not an optional extra,
+# so it isn't left as a manual migration step. `~/.local/bin` doesn't need
+# any PATH wiring of our own — it's already in Debian's default
+# /etc/skel/.profile.
+RUN HOME=/etc/skel bash -c "$(curl -fsSL https://claude.ai/install.sh)" -- "${CLAUDE_CODE_VERSION}" \
     && echo "${CLAUDE_CODE_VERSION}" > /etc/claude-code-version-pin
 
 # --- ttyd (static binary; not packaged for Debian bookworm) -------------

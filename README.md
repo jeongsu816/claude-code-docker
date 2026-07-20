@@ -211,6 +211,18 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
 claude
 ```
 
+`claude` CLI는 npm이 아니라 Anthropic의 **네이티브 설치 스크립트**
+(`claude.ai/install.sh`)로 설치되어 있다 — Node.js/npm 의존성이 전혀 없고,
+설치 위치도 시스템 전역이 아니라 **`dev` 계정 홈 안**(`~/.local/share/claude`,
+`~/.local/bin/claude`)이다. `dev`가 직접 소유하고 있어야 내장 자동 업데이트
+기능이 파일을 직접 덮어쓸 수 있기 때문이다(시스템 전역 설치였다면 root
+소유라 dev가 쓰기 권한이 없어서 업데이트 시도마다 `Auto-update failed: no
+write permission to npm prefix` 에러가 난다 — 예전에 npm 전역 설치로 시도했을
+때 실제로 겪은 문제). nvm/pyenv와 마찬가지로 `/etc/skel`에 심어서 최초 부팅
+시 홈으로 복사되며, 이미 부팅된 적 있는 기존 홈 디렉토리에도 entrypoint가
+매 부팅마다 확인해서 없으면 자동으로 채워 넣는다(수동으로 옮길 필요 없음 —
+nvm/pyenv와 달리 이건 핵심 기능이라 자동 반영되게 해뒀다).
+
 ## 개발 툴체인
 
 claude가 이 컨테이너 안에서 실제로 빌드/실행까지 하는 개발 용도이므로,

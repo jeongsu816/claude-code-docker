@@ -31,6 +31,38 @@ else
     chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
 fi
 
+# The above only ever fires once, ever, per DEV_HOME_PATH (gated on
+# .bashrc), so anything added to /etc/skel afterward — like this — doesn't
+# reach homes that were already bootstrapped before it existed. Unlike
+# nvm/pyenv (optional extras, left as a documented manual migration),
+# claude itself is core functionality, so this backfills it into an
+# already-bootstrapped home on every boot instead: if it's missing, copy it
+# in fresh and let `claude`'s own auto-updater keep it current from there
+# (this container doesn't try to keep re-syncing it after the initial copy).
+# ~/.local/bin is already on PATH via Debian's default /etc/skel/.profile,
+# so no PATH wiring needed here (unlike the earlier npm --prefix approach
+# this replaced).
+if [ ! -e "${DEV_HOME}/.local/share/claude" ]; then
+    mkdir -p "${DEV_HOME}/.local/bin" "${DEV_HOME}/.local/share" "${DEV_HOME}/.local/state"
+    cp -r /etc/skel/.local/share/claude "${DEV_HOME}/.local/share/claude"
+    [ -d /etc/skel/.local/state/claude ] && cp -r /etc/skel/.local/state/claude "${DEV_HOME}/.local/state/claude"
+    chown -R "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.local"
+    log "claude-code CLI를 ${DEV_HOME}/.local 에 새로 설치했습니다 (dev 계정 소유, 자체 업데이트 가능)."
+fi
+# The installer's own ~/.local/bin/claude symlink is an *absolute* path
+# baked in at install time (`$HOME/.local/share/claude/versions/<version>`)
+# — since this image installs with HOME=/etc/skel (see Dockerfile), that
+# absolute path is always wrong once copied into /home/dev, whether via the
+# block above or the whole-skel-copy path for a brand-new home. Recreate it
+# as a relative symlink instead, which resolves correctly regardless of what
+# $HOME actually is. Runs every boot (cheap, idempotent) rather than only
+# alongside the copy above, so it also self-heals if this ever drifts.
+CLAUDE_INSTALLED_VERSION="$(ls "${DEV_HOME}/.local/share/claude/versions/" 2>/dev/null | head -1)"
+if [ -n "${CLAUDE_INSTALLED_VERSION}" ]; then
+    ln -sf "../share/claude/versions/${CLAUDE_INSTALLED_VERSION}" "${DEV_HOME}/.local/bin/claude"
+    chown -h "${DEV_USER}:${DEV_USER}" "${DEV_HOME}/.local/bin/claude"
+fi
+
 # Resolve the dev account's password on every boot, since /etc/shadow lives
 # in the container's own filesystem (not a bind mount) and does NOT survive
 # container recreation (docker compose down/up, image rebuild, etc.) the way
