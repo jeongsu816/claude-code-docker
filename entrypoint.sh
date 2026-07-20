@@ -7,34 +7,17 @@ DOCKER_SOCK="/var/run/docker.sock"
 
 # Kept outside /home/dev deliberately: filebrowser serves that whole tree
 # (--root /home/dev), so anything under it is browsable/downloadable through
-# the file manager UI. .initial_password holds the dev account's plaintext
-# password — still needed every boot to re-apply chpasswd (see below), since
-# /etc/shadow doesn't survive container recreation. Leaving it inside
-# /home/dev meant anyone with filebrowser access (even via a filebrowser-only
-# password that had since drifted from the real one) could read it and get
-# the SSH/sudo password too, defeating the "independent credential stores"
-# design.
+# the file manager UI. Only a *hash* of the dev account's password is
+# persisted here (never plaintext) — see the password-resolution block
+# below for why a hash is enough and how it stays in sync with /etc/shadow.
 DEV_STATE_DIR="/var/lib/claude-code-docker"
-MARKER="${DEV_STATE_DIR}/.container_setup_done"
-INITIAL_PASSWORD_FILE="${DEV_STATE_DIR}/.initial_password"
-LEGACY_MARKER="${DEV_HOME}/.container_setup_done"
-LEGACY_INITIAL_PASSWORD_FILE="${DEV_HOME}/.initial_password"
+PASSWORD_HASH_FILE="${DEV_STATE_DIR}/.password_hash"
 
 log() {
     echo "[entrypoint] $*"
 }
 
 mkdir -p "${DEV_STATE_DIR}"
-# One-time migration for containers set up before this file moved out of
-# /home/dev. `mv`, not copy, so the old filebrowser-exposed copy doesn't
-# linger alongside the new one.
-if [ -f "${LEGACY_INITIAL_PASSWORD_FILE}" ] && [ ! -f "${INITIAL_PASSWORD_FILE}" ]; then
-    mv "${LEGACY_INITIAL_PASSWORD_FILE}" "${INITIAL_PASSWORD_FILE}"
-    log "기존 ${LEGACY_INITIAL_PASSWORD_FILE} 를 ${INITIAL_PASSWORD_FILE} 로 이전했습니다 (filebrowser가 서빙하는 /home/dev 밖으로)."
-fi
-if [ -f "${LEGACY_MARKER}" ] && [ ! -f "${MARKER}" ]; then
-    mv "${LEGACY_MARKER}" "${MARKER}"
-fi
 
 # The home directory is typically bind-mounted from the host, so unlike a
 # named volume Docker does NOT seed it from the image on first use. Populate
@@ -48,17 +31,45 @@ else
     chown "${DEV_USER}:${DEV_USER}" "${DEV_HOME}"
 fi
 
-# Resolve the dev account's actual current password on every boot (not just
-# first run), since chpasswd and filebrowser auth below need it every time.
-# .initial_password is the single source of truth for this once set — NOT
-# re-derived from DEV_PASSWORD on every boot, because that env var could be
-# changed or dropped from .env later while the Linux password (set once, on
-# first run) stays whatever it was.
-if [ ! -f "${MARKER}" ]; then
-    if [ -n "${DEV_PASSWORD:-}" ]; then
+# Resolve the dev account's password on every boot, since /etc/shadow lives
+# in the container's own filesystem (not a bind mount) and does NOT survive
+# container recreation (docker compose down/up, image rebuild, etc.) the way
+# DEV_STATE_DIR does. Only a *hash* is ever persisted, never plaintext:
+#   - If PASSWORD_HASH_FILE exists, this isn't the first boot for this
+#     DEV_SECRETS_PATH — reapply that exact hash via `chpasswd -e` (installs
+#     an already-hashed password as-is, no re-hashing/plaintext involved).
+#   - Otherwise, resolve a plaintext password once (from an older version's
+#     leftover plaintext file, DEV_PASSWORD, or a fresh random value),
+#     apply it normally, then persist only the resulting hash and forget
+#     the plaintext.
+# ACTUAL_PASSWORD stays empty except during that one first-boot path, where
+# filebrowser bootstrap below still needs the plaintext once (in memory only
+# — it's never written to disk).
+ACTUAL_PASSWORD=""
+if [ -f "${PASSWORD_HASH_FILE}" ]; then
+    echo "${DEV_USER}:$(cat "${PASSWORD_HASH_FILE}")" | chpasswd -e
+else
+    # Earlier versions of this image persisted the password in plaintext,
+    # at one of two now-retired locations. If either is present, this is a
+    # migration, not a true first boot: reuse that value (so the real
+    # password doesn't change out from under the user), then delete the
+    # plaintext original once its hash is safely persisted below.
+    LEGACY_PLAINTEXT_FILES=(
+        "${DEV_HOME}/.initial_password"
+        "${DEV_STATE_DIR}/.initial_password"
+    )
+    for legacy_file in "${LEGACY_PLAINTEXT_FILES[@]}"; do
+        if [ -f "${legacy_file}" ]; then
+            ACTUAL_PASSWORD="$(cat "${legacy_file}")"
+            log "기존 평문 비밀번호 파일(${legacy_file})을 발견해 해시로 전환합니다. 평문 원본은 곧 삭제됩니다."
+            break
+        fi
+    done
+    if [ -z "${ACTUAL_PASSWORD}" ] && [ -n "${DEV_PASSWORD:-}" ]; then
         ACTUAL_PASSWORD="${DEV_PASSWORD}"
         log "dev 계정 비밀번호를 DEV_PASSWORD 환경변수 값으로 설정했습니다."
-    else
+    fi
+    if [ -z "${ACTUAL_PASSWORD}" ]; then
         # pipefail must be off for this one command: `head -c 20` exits as
         # soon as it has its 20 bytes, so `tr` reliably gets SIGPIPE on its
         # next write — a non-zero exit that pipefail would otherwise treat
@@ -68,26 +79,20 @@ if [ ! -f "${MARKER}" ]; then
         log "=============================================="
         log " dev 계정 초기 비밀번호가 자동 생성되었습니다:"
         log " ${ACTUAL_PASSWORD}"
-        log " (이 값은 ${INITIAL_PASSWORD_FILE} 에도 저장됩니다)"
+        log " 이 비밀번호는 지금 이 순간에만 로그로 출력되고, 평문으로는"
+        log " 저장되지 않습니다 — 지금 안전한 곳에 따로 적어두세요."
+        log " 잊어버렸다면: docker exec -u root <컨테이너> passwd ${DEV_USER}"
         log "=============================================="
     fi
-    # Always persisted (even when it came from DEV_PASSWORD), so subsequent
-    # boots have a reliable value to read back regardless of what .env says
-    # by then.
-    printf '%s\n' "${ACTUAL_PASSWORD}" >"${INITIAL_PASSWORD_FILE}"
-    chown "${DEV_USER}:${DEV_USER}" "${INITIAL_PASSWORD_FILE}"
-    chmod 600 "${INITIAL_PASSWORD_FILE}"
-    touch "${MARKER}"
-else
-    ACTUAL_PASSWORD="$(cat "${INITIAL_PASSWORD_FILE}")"
+
+    echo "${DEV_USER}:${ACTUAL_PASSWORD}" | chpasswd
+    getent shadow "${DEV_USER}" | cut -d: -f2 >"${PASSWORD_HASH_FILE}"
+    chmod 600 "${PASSWORD_HASH_FILE}"
+    for legacy_file in "${LEGACY_PLAINTEXT_FILES[@]}"; do
+        rm -f "${legacy_file}"
+    done
+    rm -f "${DEV_HOME}/.container_setup_done" "${DEV_STATE_DIR}/.container_setup_done"
 fi
-# Applied every boot, not just first run: /etc/shadow lives in the
-# container's own filesystem, not a bind mount, so it does NOT survive
-# container recreation (docker compose down/up, image rebuild, etc.) the way
-# the paths above do. Without re-applying this every time, a recreated
-# container would silently leave `dev` with no usable Linux password even
-# though .initial_password/filebrowser still have the right value.
-echo "${DEV_USER}:${ACTUAL_PASSWORD}" | chpasswd
 
 # Deliberately NOT adding dev to the socket's group here. docker.sock access
 # is equivalent to unrestricted root on the NAS host, and dev's sudo already
@@ -136,7 +141,14 @@ if [ ! -f "${FILEBROWSER_DB}" ]; then
     # could be shorter. Check first — letting `users add` fail here would
     # otherwise abort the whole entrypoint (set -e) and take sshd/ttyd/claude
     # down with it over what's just a filebrowser-specific limitation.
-    if [ "${#ACTUAL_PASSWORD}" -lt 12 ]; then
+    # ACTUAL_PASSWORD is only ever non-empty on the one boot where the
+    # password hash was just (re)created above — if this DB is missing on
+    # any other boot (e.g. someone deleted just FILEBROWSER_DATA_PATH), the
+    # plaintext genuinely isn't available anymore to bootstrap it with.
+    if [ -z "${ACTUAL_PASSWORD}" ]; then
+        log "경고: filebrowser 계정이 없는데 평문 비밀번호를 보관하지 않아 자동으로 만들 수 없습니다."
+        log "       filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
+    elif [ "${#ACTUAL_PASSWORD}" -lt 12 ]; then
         log "경고: dev 비밀번호가 12자 미만이라 filebrowser 최소 비밀번호 길이(12자) 요구사항을 만족하지 못해 filebrowser 계정을 생성하지 않았습니다."
         log "       DEV_PASSWORD를 12자 이상으로 바꿔서 컨테이너를 재생성하거나, filebrowser 웹 UI에서 직접 초기 설정을 진행하세요."
     elif ! gosu "${DEV_USER}" filebrowser config init --database "${FILEBROWSER_DB}" --root "${DEV_HOME}" >/tmp/filebrowser-init.log 2>&1; then

@@ -46,7 +46,7 @@ DEV_GID=1000
 각각 bind mount된다. 뒤의 세 개가 `/home/dev` 밖의 별도 경로인 이유는 모두
 같다 — filebrowser가 정확히 `/home/dev`를 그대로 서빙하기 때문에, 그
 트리 안에 두면 안 되는 것들(SSH 호스트 키, filebrowser 자신의 계정 DB,
-`dev` 계정의 평문 비밀번호가 담긴 `.initial_password`)을 전부 밖으로 뺀
+`dev` 계정 비밀번호의 해시가 담긴 `.password_hash`)을 전부 밖으로 뺀
 것이다. 디렉토리가 없으면 Docker가 자동으로 생성하고, 소유권/최초 초기화는
 컨테이너 entrypoint가 알아서 처리한다.
 
@@ -67,16 +67,28 @@ docker buildx build --platform linux/arm64 -t claude-code-docker:latest --load .
 `dev` 계정의 sudo/로그인 비밀번호는 최초 실행 시 자동으로 설정된다.
 
 - `.env`의 `DEV_PASSWORD`에 값을 채워두면 그 값이 사용된다.
-- 비워두면 무작위 비밀번호가 생성되어 다음 두 곳에 남는다:
-  - `docker logs claude-code-docker`
-  - 컨테이너 내부 `/var/lib/claude-code-docker/.initial_password`
-    (`/home/dev` 밖에 있다 — filebrowser가 서빙하는 트리에 평문 비밀번호가
-    노출되지 않도록 일부러 분리해뒀다. 아래 "접속과 인증" 참고)
+- 비워두면 무작위 비밀번호가 생성되어 **`docker logs claude-code-docker`에
+  딱 한 번만** 출력된다. **평문으로는 어디에도 저장되지 않으므로**, 그
+  자리에서 안전한 곳에 따로 적어둬야 한다.
 
-이후 실행부터는 (홈 디렉토리가 bind mount로 영속화되므로) `.env`의
-`DEV_PASSWORD` 값이 바뀌어도 새로 반영하지 않고 항상 최초에 정해진 값을
-그대로 유지한다 — 다만 그 값 자체는 컨테이너를 재생성해도(재빌드, `down`
-후 `up` 등) 매번 다시 적용되므로 SSH/sudo 비밀번호가 풀리는 일은 없다.
+컨테이너는 dev 계정 비밀번호의 평문을 전혀 보관하지 않는다 — `/etc/shadow`
+와 동일한 방식의 **해시**만 `${DEV_SECRETS_PATH}`(`/var/lib/claude-code-docker`)
+에 저장해두고, 컨테이너가 재생성될 때마다(재빌드, `down` 후 `up` 등,
+`/etc/shadow` 자체는 bind mount가 아니라 매번 사라진다) 그 해시를 그대로
+다시 적용한다. `.env`의 `DEV_PASSWORD` 값은 이 해시가 이미 만들어진
+이후로는 무시된다.
+
+비밀번호를 잊었다면 NAS에서 직접 재설정한다 (호스트에서, Docker가 있는
+NAS에 로그인해서):
+
+```bash
+docker exec -u root claude-code-docker passwd dev
+```
+
+컨테이너 안에서 SSH로 접속해 `passwd`(본인 비밀번호 변경) 또는
+`sudo passwd dev`(root 권한으로 변경)로 바꾼 비밀번호는 PAM 훅이 자동으로
+감지해서 같은 해시 저장소에 즉시 반영하므로, 이후 컨테이너를 재생성해도
+새로 바꾼 비밀번호가 그대로 유지된다.
 
 ## 접속과 인증
 
@@ -153,8 +165,9 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
   컨테이너를 재생성해도 SSH 지문이 바뀌지 않도록 함)
 - `${FILEBROWSER_DATA_PATH}` → `/var/lib/filebrowser` (filebrowser 계정/설정
   DB — `/home/dev`와 분리되어 있음)
-- `${DEV_SECRETS_PATH}` → `/var/lib/claude-code-docker` (`dev` 계정의 평문
-  비밀번호가 담긴 `.initial_password` — 역시 `/home/dev`와 분리되어 있음)
+- `${DEV_SECRETS_PATH}` → `/var/lib/claude-code-docker` (`dev` 계정 비밀번호의
+  해시가 담긴 `.password_hash` — 평문은 저장하지 않는다. 역시 `/home/dev`와
+  분리되어 있음)
 
 ## 보안 참고사항
 

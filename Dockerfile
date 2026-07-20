@@ -165,6 +165,22 @@ RUN rm -f /etc/ssh/ssh_host_* \
     'HostKey /etc/ssh/host_keys/ssh_host_ed25519_key' \
     > /etc/ssh/sshd_config.d/dev.conf
 
+# --- PAM hook: keep the persisted password hash in sync with /etc/shadow --
+# entrypoint.sh only ever applies the persisted hash *at boot*, so without
+# this, an interactive `passwd`/`sudo passwd dev` change would work until
+# the container is recreated, then silently get reverted to the old value.
+# Appended after pam_permit.so in the "Additional block" this file's own
+# header comment says is the place for local hooks — `optional` means the
+# module's result is ignored entirely, so it can never block a login or a
+# password change even if something about it fails. It also only runs on
+# the success path: a failed password attempt hits pam_deny.so's
+# `requisite` first and the stack stops before reaching this line at all.
+COPY sync-dev-password-hash.sh /usr/local/sbin/sync-dev-password-hash.sh
+RUN chmod +x /usr/local/sbin/sync-dev-password-hash.sh \
+    && printf '%s\n' \
+    'password	optional			pam_exec.so seteuid /usr/local/sbin/sync-dev-password-hash.sh' \
+    >> /etc/pam.d/common-password
+
 COPY --from=shim-builder /getrandom_shim.so /usr/local/lib/getrandom_shim.so
 # Works around Bun's getrandom() crash on kernels < 3.17 (see
 # getrandom_shim.c). A no-op passthrough on kernels that do have
