@@ -272,6 +272,27 @@ COPY --from=shim-builder /getrandom_shim.so /usr/local/lib/getrandom_shim.so
 # the .so is copied in, so earlier RUN steps don't warn about a missing
 # preload target.
 ENV LD_PRELOAD=/usr/local/lib/getrandom_shim.so
+# Belt-and-suspenders on top of the ENV above, found necessary after a real
+# crash report on the actual NAS: a per-connection sshd child died with
+# SIGABRT (glibc's fatal arc4random-entropy abort, the exact crash this
+# shim exists to prevent) even though /proc/<master-pid>/maps confirmed the
+# shim .so was mapped into the sshd *master* process. LD_PRELOAD as an env
+# var is exactly the kind of thing that can fail to propagate cleanly
+# across some fork/exec transition inside sshd's connection handling — this
+# repo already has a proven instance of a related class of problem (SSH
+# login shells not inheriting entrypoint.sh's exported env, because PAM
+# rebuilds it — see the environment-inheritance section below), so treating
+# env-var propagation into arbitrary sshd-internal process transitions as
+# fragile-by-default was the reasonable read here too, even without a
+# strace proving the exact mechanism this time. /etc/ld.so.preload sidesteps
+# the whole question: the dynamic linker reads it directly off disk for
+# every dynamically linked executable, unconditionally, no dependency on
+# any process's environment surviving anything. (This fix, plus two more
+# getrandom-shim bugs it went on to uncover — getentropy() and sshd's own
+# internal seccomp sandbox blocking a lazy open() — are written up in full
+# in CLAUDE.md's "getrandom() shim" section; the short version is in
+# getrandom_shim.c's own comments.)
+RUN echo /usr/local/lib/getrandom_shim.so > /etc/ld.so.preload
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh

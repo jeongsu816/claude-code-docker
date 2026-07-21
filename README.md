@@ -263,8 +263,9 @@ Linux 3.17부터 생겨서, 커널이 그보다 오래된 호스트(일부 구�
 에서는 `panic: getrandom failed: errno 38`로 크래시가 난다.
 
 이미지 빌드 시 `getrandom_shim.c`가 자동으로 컴파일되어
-`/usr/local/lib/getrandom_shim.so`로 설치되고, `LD_PRELOAD` 환경변수로
-항상 적용된다. libc의 `getrandom()`과 `syscall()` 양쪽 경로를 모두
+`/usr/local/lib/getrandom_shim.so`로 설치되고, `LD_PRELOAD` 환경변수와
+`/etc/ld.so.preload` 두 가지 방식으로 동시에 적용된다(후자를 추가한 이유는
+아래 참고). libc의 `getrandom()`과 `syscall()` 양쪽 경로를 모두
 가로채서(Bun은 `syscall()`을 쓰지만, 컨테이너 안 다른 프로그램이 직접
 `getrandom()`을 부를 수도 있으므로 둘 다 후킹한다) `ENOSYS`로 실패하면
 `/dev/urandom`을 직접 읽어 대신 반환한다. 컨테이너는 항상 이 심을 켠 채로
@@ -272,16 +273,32 @@ Linux 3.17부터 생겨서, 커널이 그보다 오래된 호스트(일부 구�
 로그를 남기지 않고 조용히 동작한다. 정상 커널에서는 실제 syscall이 그대로
 성공하므로 완전히 무해한 passthrough다.
 
-glibc 2.36 이상의 `arc4random()`/`arc4random_buf()`/`arc4random_uniform()`은
-별도로 후킹한다 — `sshd`가 이 함수들을 직접 호출하는데, glibc 내부 구현이
-`getrandom(2)`를 raw `syscall` 명령어로 인라인 호출해서 위의 두 후킹을
-우회하고, `ENOSYS`를 받으면 복구 불가능한 오류로 보고 그대로
-`abort()`한다(`Fatal glibc error: cannot get entropy for arc4random`) —
-이게 구형 커널에서 SSH 접속마다 생기는 자식 프로세스가 죽던 원인이었다.
-`arc4random*` 자체는 일반적으로 export된 동적 심볼이라 이것도 그대로
-후킹해서 같은 폴백 경로로 우회한다.
+glibc 2.36 이상의 `arc4random()`/`arc4random_buf()`/`arc4random_uniform()`,
+그리고 OpenSSL 3.x의 `getentropy()`는 별도로 후킹한다 — `sshd`가 이
+함수들을 직접 호출하는데, 내부 구현이 `getrandom(2)`를 raw `syscall`
+명령어로 인라인 호출해서 위의 두 후킹을 우회하기 때문이다. `arc4random*`은
+`ENOSYS`를 받으면 복구 불가능한 오류로 보고 그대로
+`abort()`하고(`Fatal glibc error: cannot get entropy for arc4random`),
+`getentropy()`(OpenSSL이 자기 PRNG를 시딩할 때 씀)는 실패하면 그냥
+"PRNG is not seeded"를 찍고 sshd 자체가 종료돼버린다 — 실제 NAS에서
+SSH 접속마다(그리고 처음엔 sshd 자체 기동에서도) 이 두 가지로 계속
+죽는 걸 겪고서야 다 잡았다.
 
-시놀로지 DS216+II(커널 3.10.108)에서 실제로 정상 동작을 확인했다.
+**후킹만으로는 부족했던 이유**: sshd는 접속을 받을 때마다 내부적으로 자기
+자신의 seccomp 샌드박스를 적용하는데(OpenSSH 자체 보안 기능, 이 컨테이너의
+seccomp과는 무관), 그 샌드박스는 `open()`을 허용하지 않는다. 그래서
+`/dev/urandom`을 "필요할 때마다 새로 열기"로는 안 되고, sshd가 시작
+직후 스스로 실행하는 `close_range()`(모든 파일 디스크립터를 강제로
+닫아버리는 보안 강화 조치) 이후, 아직 샌드박스가 걸리기 전인 시점에 딱
+한 번 열어서 **절대 닫지 않고 캐싱**해뒀다가, 이후 fork되는 접속 처리
+자식 프로세스가 그 fd를 그대로 물려받게 만들었다 — 그러면 자식은 새로
+`open()`을 할 필요가 없어서 샌드박스에 안 걸린다. `LD_PRELOAD` 환경변수만으로는
+어느 시점에 이게 안정적으로 재현이 안 돼서(fork/exec 경로에 따라 환경변수가
+유실될 수 있음), `/etc/ld.so.preload`(동적 링커가 프로세스 종류와 무관하게
+항상 직접 읽는 파일)를 추가로 같이 걸어서 이중으로 보장해뒀다.
+
+시놀로지 DS216+II(커널 3.10.108)에서 seccomp으로 구형 커널을 시뮬레이션한
+환경과 실제 배포 양쪽 모두에서 반복 접속 테스트로 정상 동작을 확인했다.
 
 참고로 `.env`의 `CLAUDE_CODE_VERSION`으로 설치 버전을 고정할 수도 있다.
 기본값 `latest`면 빌드 시점의 최신 버전이 설치되고 `claude`의 내장

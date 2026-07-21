@@ -6,9 +6,13 @@
  * syscall() catches that. Other programs in the container might instead
  * call the higher-level getrandom() libc symbol directly, so that's
  * overridden too, in case anything else on the system needs it. glibc's
- * arc4random()/arc4random_buf()/arc4random_uniform() are a third path that
- * needs its own override — see the comment above their implementations
- * below for why neither of the first two overrides catches those.
+ * arc4random()/arc4random_buf()/arc4random_uniform() are a third path, and
+ * OpenSSL's getentropy() (used by sshd, via libcrypto) is a fourth — see
+ * the comments above each implementation below for why neither of the
+ * first two overrides catches those. Getting this shim to actually reach
+ * every one of these paths on a real old-kernel host (not just under the
+ * seccomp ENOSYS simulation) also needed installing it via
+ * /etc/ld.so.preload, not just LD_PRELOAD — see the Dockerfile.
  *
  * On kernels that do have getrandom(2), the real syscall succeeds and this
  * shim is a no-op passthrough — safe to leave on unconditionally. Since
@@ -30,16 +34,51 @@
 typedef long (*syscall_fn)(long number, ...);
 static syscall_fn real_syscall = NULL;
 
+/*
+ * /dev/urandom is opened lazily, on first actual need, and then the fd is
+ * cached in this static and reused forever after — never closed, never
+ * reopened. Two things this specifically avoids, both found the hard way
+ * against the real sshd binary (via `strace -f`, not guessed):
+ *
+ * 1. Opening it eagerly at library-load time (a __attribute__((constructor))
+ *    tried first) doesn't survive: sshd's master calls
+ *    close_range(3, ~0, 0) early in its own startup — a real, independent
+ *    OpenSSH hardening step that unconditionally closes every fd above 2,
+ *    with no regard for who opened them or why. Any fd opened before that
+ *    point is gone, full stop; no fd number or CLOEXEC choice dodges it.
+ * 2. Opening it fresh on *every* call (open+read+close each time) works
+ *    fine for the master, but not for a later per-connection child: sshd
+ *    applies its own internal seccomp-BPF sandbox to that pre-auth,
+ *    network-facing process (independent of any container-level seccomp,
+ *    and no longer even configurable off via sshd_config's long-removed
+ *    UsePrivilegeSeparation directive on modern OpenSSH), and that
+ *    sandbox's syscall allowlist has no reason to include open()/openat()
+ *    — a healthy sshd never opens new files at that point. A fresh open()
+ *    call there gets the whole process killed with SIGSYS.
+ *
+ * The fix both of those rule out: open once, the first time anything here
+ * actually needs a fallback — which in practice happens early in the
+ * master's own startup (OpenSSL seeding its PRNG via getentropy(), see
+ * below), safely *after* close_range already ran. Caching instead of
+ * closing means that same fd is still open and valid when sshd later
+ * forks a per-connection child — fork() duplicates the fd table as-is, so
+ * the child inherits an already-open fd and never needs to call open() at
+ * all, sidestepping the sandbox restriction entirely rather than trying to
+ * work around it.
+ */
+static int urandom_fd = -1;
+
 static long fallback_getrandom(void *buf, size_t buflen) {
-    int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) return -1;
+    if (urandom_fd < 0) {
+        urandom_fd = open("/dev/urandom", O_RDONLY);
+        if (urandom_fd < 0) return -1;
+    }
     ssize_t total = 0;
     while ((size_t)total < buflen) {
-        ssize_t n = read(fd, (char *)buf + total, buflen - total);
-        if (n <= 0) { close(fd); errno = EIO; return -1; }
+        ssize_t n = read(urandom_fd, (char *)buf + total, buflen - total);
+        if (n <= 0) { errno = EIO; return -1; }
         total += n;
     }
-    close(fd);
     return total;
 }
 
@@ -129,4 +168,29 @@ uint32_t arc4random_uniform(uint32_t upper_bound) {
     }
 
     return r % upper_bound;
+}
+
+/*
+ * A fourth path, found via a real crash on the real NAS: OpenSSL 3.x
+ * (libcrypto.so.3, which sshd links against for its crypto — confirmed via
+ * `nm -D libcrypto.so.3`, showing an undefined `getentropy@GLIBC_2.25`
+ * import) seeds its own PRNG through glibc's getentropy() wrapper, not
+ * getrandom() or syscall() or arc4random* — a *fifth* symbol beyond the
+ * three already covered above, and this shim didn't override it, so
+ * OpenSSL's calls sailed straight past every override in this file and hit
+ * ENOSYS raw. Unlike arc4random's fatal abort, OpenSSL just gives up
+ * quietly ("PRNG is not seeded" on stderr) and sshd's *master* process
+ * exits outright — not just a per-connection child. Confirmed via `strace
+ * -f -e trace=getrandom,openat,...` against the real sshd binary under the
+ * seccomp ENOSYS simulation: two getrandom syscalls fail with ENOSYS with
+ * no fallback read() in between (unlike calls that do go through this
+ * shim), immediately followed by that message and exit. getentropy()'s
+ * real contract caps requests at 256 bytes (glibc returns EIO above that)
+ * — preserved here for compatibility, though this shim's callers so far
+ * never approach that.
+ */
+int getentropy(void *buffer, size_t length) {
+    if (length > 256) { errno = EIO; return -1; }
+    if (get_random_bytes(buffer, length) < 0) return -1;
+    return 0;
 }
