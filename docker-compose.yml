@@ -12,7 +12,7 @@ services:
     restart: unless-stopped
     ports:
       - "${SSH_PORT:-2222}:22"
-      - "${TTYD_PORT:-7681}:7681"
+      - "${WETTY_PORT:-3000}:3000"
       - "${FILEBROWSER_PORT:-8080}:8080"
     volumes:
       - ${DEV_HOME_PATH}:/home/dev

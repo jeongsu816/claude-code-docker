@@ -7,7 +7,8 @@ RUN gcc -shared -fPIC -O2 -o /getrandom_shim.so /tmp/getrandom_shim.c -ldl
 
 FROM debian:bookworm-slim
 
-ARG TTYD_VERSION=1.7.7
+ARG NODE_MAJOR=24
+ARG WETTY_VERSION=3.2.0
 ARG FILEBROWSER_VERSION=2.63.18
 ARG NVM_VERSION=0.40.6
 ARG PYENV_VERSION=v2.8.1
@@ -20,7 +21,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # --- base packages ------------------------------------------------------
 # build-essential/gdb/cmake/pkg-config: baked-in C/C++ toolchain (no
 # per-project version needed, unlike Node/Python below, so no reason to make
-# this a user-space/no-sudo-required install).
+# this a user-space/no-sudo-required install). python3 here is for
+# node-gyp, needed to compile wetty's node-pty native addon at npm-install
+# time below — not otherwise used (pyenv, not this, is how project Python
+# versions get installed).
 # The libssl-dev..liblzma-dev block is pyenv's own documented "suggested
 # build environment" for Debian/Ubuntu — without these, `pyenv install`
 # either fails outright or silently produces a Python missing ssl/sqlite3/etc.
@@ -40,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gdb \
         cmake \
         pkg-config \
+        python3 \
         libssl-dev \
         zlib1g-dev \
         libbz2-dev \
@@ -102,17 +107,29 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 RUN HOME=/etc/skel bash -c "$(curl -fsSL https://claude.ai/install.sh)" -- "${CLAUDE_CODE_VERSION}" \
     && echo "${CLAUDE_CODE_VERSION}" > /etc/claude-code-version-pin
 
-# --- ttyd (static binary; not packaged for Debian bookworm) -------------
-RUN set -eux; \
-    case "$(dpkg --print-architecture)" in \
-        amd64) TTYD_ARCH=x86_64 ;; \
-        arm64) TTYD_ARCH=aarch64 ;; \
-        armhf) TTYD_ARCH=armhf ;; \
-        *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /usr/local/bin/ttyd \
-        "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.${TTYD_ARCH}"; \
-    chmod +x /usr/local/bin/ttyd
+# --- Node.js + wetty (web terminal; real SSH client, not a pty-exec) ------
+# Replaces ttyd. ttyd just execs a local command (tmux) behind a pty and had
+# no working auth story that didn't involve persisting a plaintext password
+# somewhere (see the password-hash-only redesign elsewhere in this repo) —
+# wetty instead is a genuine SSH *client* that connects to this same
+# container's own sshd, so auth is just PAM/shadow, identical to a normal
+# SSH login, and no separate credential of any kind needs to be stored for
+# it. It also means the tmux auto-attach `.bashrc` snippet above fires
+# naturally through the real SSH session (`$SSH_TTY` gets set for real)
+# instead of ttyd's separate `-W tmux new-session ...` argument — one
+# code path for both access methods instead of two.
+#
+# Node.js needed system-wide for this (global install is fine — this isn't
+# a per-project version the way nvm/pyenv's Node/Python are, it's a fixed
+# dependency of wetty itself). wetty's node-pty dependency has a native
+# addon compiled via node-gyp at install time, hence python3/build-essential
+# in the base packages above — confirmed empirically that npm install fails
+# without them (node-gyp errors looking for a Python interpreter).
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g wetty@${WETTY_VERSION} \
+    && npm cache clean --force
 
 # --- filebrowser (static binary; web file manager for /home/dev) --------
 RUN set -eux; \
@@ -218,6 +235,6 @@ COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-EXPOSE 22 7681 8080
+EXPOSE 22 3000 8080
 
 ENTRYPOINT ["/entrypoint.sh"]

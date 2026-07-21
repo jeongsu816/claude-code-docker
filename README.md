@@ -1,9 +1,10 @@
 # claude-code-docker
 
 시놀로지 NAS에서 Claude Code를 상시 실행하기 위한 Docker 이미지. `dev`
-사용자로 SSH 또는 브라우저(ttyd)로 접속하며, 두 경로 모두 동일한 tmux
+사용자로 SSH 또는 브라우저(wetty)로 접속하며, 두 경로 모두 동일한 tmux
 세션(`main`)에 붙기 때문에 접속이 끊겨도 실행 중이던 작업이 그대로
-유지된다. `dev`는 `/var/run/docker.sock`을 통해 NAS의 Docker를
+유지된다. wetty는 실제 SSH 클라이언트라 인증도 SSH와 동일하다(아래 "접속과
+인증" 참고). `dev`는 `/var/run/docker.sock`을 통해 NAS의 Docker를
 `sudo docker ...`로 제어할 수 있다 (매번 비밀번호 필요 — 아래 "NAS Docker
 제어" 참고). 웹 파일 매니저(filebrowser)도 포함되어 있어 `/home/dev`를
 브라우저에서 직접 관리할 수 있다.
@@ -30,7 +31,7 @@ FILEBROWSER_DATA_PATH=/volume1/docker/claude-code-docker/filebrowser
 DEV_SECRETS_PATH=/volume1/docker/claude-code-docker/secrets
 DEV_PASSWORD=
 SSH_PORT=2222
-TTYD_PORT=7681
+WETTY_PORT=3000
 FILEBROWSER_PORT=8080
 DEV_UID=1000
 DEV_GID=1000
@@ -98,25 +99,27 @@ docker exec -u root claude-code-docker passwd dev
 ## 접속과 인증
 
 - SSH: `ssh -p ${SSH_PORT} dev@<NAS-IP>` (기본 2222) — Linux 계정 인증(PAM)
-- 웹 터미널(ttyd): `http://<NAS-IP>:${TTYD_PORT}` (기본 7681) — **인증 없음.**
-  접속하면 곧바로 `dev` 계정 tmux 세션으로 들어간다.
+- 웹 터미널(wetty): `http://<NAS-IP>:${WETTY_PORT}` (기본 3000) — **SSH와
+  완전히 동일한 인증.** wetty는 ttyd처럼 로컬 명령을 그냥 열어주는 게
+  아니라 컨테이너 자기 자신의 sshd에 실제로 SSH 접속하는 클라이언트라서,
+  브라우저 터미널 화면에 진짜 `dev@localhost's password:` 프롬프트가 뜬다.
+  아이디는 `dev`로 미리 채워져 있어 비밀번호만 입력하면 된다.
 - 파일 매니저(filebrowser): `http://<NAS-IP>:${FILEBROWSER_PORT}` (기본 8080)
   — 자체 로그인 화면, `dev` / 위 비밀번호
 
-> **ttyd는 자체 인증이 없다.** `TTYD_PORT`에 네트워크로 닿을 수 있는 사람은
-> 누구나 비밀번호 없이 `dev` 셸을 그대로 얻는다. 원래는 ttyd가 매 시작마다
-> `-c dev:PASSWORD`로 basic auth를 재구성했는데, 그러려면 평문 비밀번호를
-> 컨테이너 안에 계속 저장해둬야 했고 그 파일이 `/home/dev`(filebrowser가
-> 서빙하는 트리) 안에 있어서 별도 문제가 있었다. 지금은 그 인증 자체를
-> 뺐다 — **`TTYD_PORT`를 신뢰할 수 없는 네트워크(인터넷 등)에 노출하면
-> 절대 안 된다.** NAS 방화벽/VPN 뒤에 두거나, 나중에 Authentik 같은
-> forward-auth를 앞단에 붙이는 것을 전제로 한다 (아래 "보안 참고사항"
-> 참고, 아직 미구현).
+> 예전에는 ttyd를 썼는데, ttyd는 그냥 로컬 명령(tmux)을 pty로 열어주는
+> 방식이라 자체 인증이 없으면 완전히 무방비, 있으면 평문 비밀번호를
+> 어딘가에 계속 저장해둬야 하는 딜레마가 있었다. wetty는 진짜 SSH
+> 클라이언트라 이 문제가 구조적으로 없다 — 인증은 전부 sshd/PAM이
+> 처리하고, wetty 자신은 어떤 자격증명도 저장하지 않는다. 그래도 SSH
+> 자체가 비밀번호 인증이니 `WETTY_PORT`를 인터넷에 직접 노출하지 않는 건
+> 마찬가지로 권장된다 (아래 "보안 참고사항" 참고).
 
-SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩**된다. 다만
-둘은 서로 다른 별개의 계정 저장소라는 점에 주의:
+SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩**된다
+(wetty는 SSH와 완전히 같은 계정이라 별도로 셀 것도 없다). 다만 filebrowser는
+별개의 계정 저장소라는 점에 주의:
 
-- SSH는 Linux 시스템 계정(`passwd`로 변경)
+- SSH(그리고 wetty)는 Linux 시스템 계정(`passwd`로 변경)
 - filebrowser는 별도 DB(`${FILEBROWSER_DATA_PATH}`)에 자기 계정을 저장하며,
   **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서 비밀번호를 바꾸면
   그 이후로는 SSH와 달라진다. filebrowser 기본 최소 비밀번호 길이는 12자지만,
@@ -131,8 +134,10 @@ SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩
 - `passwd`로 SSH 비밀번호를 나중에 바꿔도 filebrowser에는 자동
   반영되지 않는다.
 
-SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는다.
-한쪽에서 작업하다 연결이 끊겨도 다른 경로로 재접속하면 그대로 이어진다.
+SSH와 wetty 둘 다 (wetty도 결국 SSH 로그인이므로) `.bashrc`의 tmux
+자동 attach 로직을 그대로 타서 `tmux new-session -A -s main`으로 같은
+세션에 붙는다. 한쪽에서 작업하다 연결이 끊겨도 다른 경로로 재접속하면
+그대로 이어진다.
 
 같은 세션 안에서 창(window)을 여러 개 두고 전환할 수 있어서, 예를 들어
 한 창에서 `claude`를 실행해두고 다른 창에서 별도 작업을 할 수 있다:
@@ -179,29 +184,26 @@ SSH와 ttyd 둘 다 `tmux new-session -A -s main`으로 같은 세션에 붙는�
 
 ## 보안 참고사항
 
-- **ttyd는 인증이 전혀 없다.** `TTYD_PORT`는 반드시 NAS 방화벽/VPN 뒤에만
-  둘 것 — 인터넷은 물론 신뢰하지 않는 내부망에도 노출하면 안 된다. 이
-  포트에 닿을 수 있는 사람은 곧바로 `dev` 셸을 얻는다.
-- SSH·filebrowser는 비밀번호 인증이다. 이것도 인터넷에 직접 노출하지 말고
-  NAS 방화벽/VPN 뒤에 두거나, SSH는
+- SSH·wetty·filebrowser 모두 비밀번호 인증이다(wetty는 SSH 그 자체이므로
+  사실상 SSH와 같은 노출 위험). 인터넷에 직접 노출하지 말고 NAS 방화벽/VPN
+  뒤에 두는 것을 권장한다. SSH(및 wetty)는
   `${DEV_HOME_PATH}/.ssh/authorized_keys`에 공개키를 넣어 키 기반 인증으로
-  전환하는 것을 권장한다.
+  전환할 수도 있다.
 - `docker.sock` 마운트는 NAS 호스트 전체에 대한 강한 권한을 컨테이너에
   부여하는 것과 사실상 동등하다. `dev`는 이 소켓의 그룹에 속하지 않으므로
   `sudo` 비밀번호 없이는 사용할 수 없지만(위 "NAS Docker 제어" 참고),
   `dev` 계정 자격증명(로그인 비밀번호)을 신뢰할 수 있는 사람에게만 공유할
   것.
-- 여러 서비스를 Authentik 같은 SSO 뒤에 두고 운영 중이라면, ttyd와
-  filebrowser는 둘 다 HTTP 기반이라 forward-auth(리버스 프록시 +
-  Authentik Outpost)로 붙일 수 있다 — filebrowser는 `--auth.method=proxy`
-  로 프록시가 전달한 사용자명을 그대로 신뢰하는 방식까지 지원하고, ttyd는
-  지금 자체 인증이 아예 없으므로 forward-auth가 사실상 유일한 접근 통제
-  수단이 된다. SSH는 구조상 forward-auth 대상이 아니라서 계속 Linux 계정
-  비밀번호로 남는다. 현재 `docker-compose.yml`은 포트를 호스트에 직접
-  publish하므로, 이렇게 묶으려면 기존 Traefik/Authentik이 쓰는 Docker
-  네트워크에 join하고 포트 직접 노출은 끄는 재구성이 필요하다 (아직
-  미구현 — Authentik을 실제로 붙이기 전까지는 `TTYD_PORT`를 신뢰할 수
-  있는 네트워크 밖으로 노출하지 말 것).
+- 여러 서비스를 Authentik 같은 SSO 뒤에 두고 운영 중이라면, wetty와
+  filebrowser는 둘 다 HTTP 기반이라 forward-auth(리버스 프록시 + Authentik
+  Outpost)를 앞단에 추가로 얹을 수 있다 — filebrowser는 `--auth.method=proxy`
+  로 프록시가 전달한 사용자명을 그대로 신뢰하는 방식까지 지원한다. wetty는
+  이미 자체적으로 SSH/PAM 인증을 하므로 forward-auth는 필수는 아니고
+  이중 방어(defense in depth) 성격이다. SSH 자체는 구조상 forward-auth
+  대상이 아니라서 계속 Linux 계정 비밀번호로 남는다. 현재
+  `docker-compose.yml`은 포트를 호스트에 직접 publish하므로, 이렇게
+  묶으려면 기존 Traefik/Authentik이 쓰는 Docker 네트워크에 join하고 포트
+  직접 노출은 끄는 재구성이 필요하다 (아직 미구현).
 
 ## Claude Code 실행
 
@@ -237,7 +239,7 @@ claude가 이 컨테이너 안에서 실제로 빌드/실행까지 하는 개발
   마찬가지로 root 권한 없이 동작한다.
 
 nvm/pyenv는 `dev`의 홈 디렉토리(`$HOME/.nvm`, `$HOME/.pyenv`) 안에 설치되고
-`.bashrc`에서 자동으로 로드되므로, **인터랙티브 셸(SSH/ttyd로 접속해
+`.bashrc`에서 자동으로 로드되므로, **인터랙티브 셸(SSH/wetty로 접속해
 tmux 세션 안에 들어온 상태)에서만** 잡힌다 — `ssh host "명령어"`처럼
 비대화형으로 원격 명령만 실행하는 경우에는 `.bashrc`가 로드되지 않아
 `nvm`/`pyenv` 명령을 못 찾는다(nvm/pyenv 자체의 일반적인 제약사항이며 이
