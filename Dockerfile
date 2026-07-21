@@ -154,7 +154,24 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
 # directory tree instead of erroring, so the "fix" did nothing on first
 # attempt. Confirmed via `npm root -g` inside the actual built image, not
 # assumed from testing against a different base image.
+#
+# The chmod after COPY is deliberate, not decorative: on the user's real
+# NAS build, the copied file came out non-world-readable (`EACCES` for
+# `dev` at runtime — Node's ESM loader, unlike CJS require, refuses to
+# silently swallow a permission error), even though the same Dockerfile
+# produced a correctly-permissioned (644) file in sandbox testing here.
+# Never fully root-caused (plausibly a stricter umask or an older builder
+# on their NAS's Docker preserving the build-context file's on-disk mode
+# literally) — rather than chase that, pin the destination permission
+# explicitly so it's correct unconditionally, regardless of the builder's
+# source-permission-preservation behavior on any given host. `COPY
+# --chmod=` would be the tidier way to do this in one line, but it needs
+# BuildKit — confirmed this sandbox's own plain `docker build` doesn't
+# default to it either ("the --chmod option requires BuildKit"), so a
+# separate RUN keeps this working regardless of which builder a given
+# host's `docker build` resolves to.
 COPY wetty-security-patch.js /usr/lib/node_modules/wetty/build/server/socketServer/security.js
+RUN chmod 644 /usr/lib/node_modules/wetty/build/server/socketServer/security.js
 
 # --- filebrowser (static binary; web file manager for /home/dev) --------
 RUN set -eux; \
