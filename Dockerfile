@@ -131,6 +131,31 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
     && npm install -g wetty@${WETTY_VERSION} \
     && npm cache clean --force
 
+# wetty 3.2.0 has a real bug (confirmed by reading its source,
+# build/server/socketServer/security.js): it computes req.protocol to pick
+# ws:// vs wss:// for the CSP connect-src directive, but doesn't apply that
+# same http/https check to `hsts` or `upgradeInsecureRequests` — both stay
+# on unconditionally. Over plain HTTP (this container has no TLS — see
+# supervisord.conf) that's actively self-defeating: the browser honors
+# upgrade-insecure-requests and silently retries wetty.js/wetty.css/the
+# websocket over https://, which nothing here answers, so the terminal
+# never renders — and HSTS then caches "always use https for this host" for
+# a year, so it keeps failing on repeat visits even after fixing the URL.
+# No CLI flag or config file exposes these helmet options (confirmed —
+# `policies(allowIframe)` takes no other parameters), so this replaces the
+# installed file outright with a patched version that reuses wetty's own
+# req.protocol check to drop both when serving over plain HTTP, leaving the
+# original secure-by-default behavior untouched for a hypothetical future
+# TLS setup (--ssl-key/--ssl-cert). Note the destination path: wetty
+# installs under /usr/lib/node_modules here (NodeSource's apt-installed
+# Node defaults its npm prefix to /usr), *not* /usr/local/lib/node_modules
+# (the official node:*-bookworm-slim Docker image's convention) — mixed
+# this up once already and the COPY silently created a whole new unused
+# directory tree instead of erroring, so the "fix" did nothing on first
+# attempt. Confirmed via `npm root -g` inside the actual built image, not
+# assumed from testing against a different base image.
+COPY wetty-security-patch.js /usr/lib/node_modules/wetty/build/server/socketServer/security.js
+
 # --- filebrowser (static binary; web file manager for /home/dev) --------
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \

@@ -103,7 +103,10 @@ docker exec -u root claude-code-docker passwd dev
   완전히 동일한 인증.** wetty는 ttyd처럼 로컬 명령을 그냥 열어주는 게
   아니라 컨테이너 자기 자신의 sshd에 실제로 SSH 접속하는 클라이언트라서,
   브라우저 터미널 화면에 진짜 `dev@localhost's password:` 프롬프트가 뜬다.
-  아이디는 `dev`로 미리 채워져 있어 비밀번호만 입력하면 된다.
+  아이디는 `dev`로 미리 채워져 있어 비밀번호만 입력하면 된다. **반드시
+  `http://`로 접속할 것** — `https://`로 접속하면 이 컨테이너는 TLS를
+  전혀 설정하지 않았으므로 그냥 안 열린다 (브라우저 주소창 자동완성이나
+  "HTTPS 우선" 설정 때문에 자기도 모르게 https로 붙는 경우가 흔하니 주의).
 - 파일 매니저(filebrowser): `http://<NAS-IP>:${FILEBROWSER_PORT}` (기본 8080)
   — 자체 로그인 화면, `dev` / 위 비밀번호
 
