@@ -60,16 +60,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Docker CLI (client only; talks to the host's docker.sock) ---------
-# docker-compose-plugin adds `docker compose` (v2, CLI-plugin style) — the
-# bare `docker` CLI from docker-ce-cli alone doesn't include it as a
-# separate binary/subcommand.
+# docker-compose-plugin adds `docker compose` (v2, CLI-plugin style) and
+# docker-buildx-plugin adds `docker buildx`/BuildKit-backed `docker build` —
+# the bare `docker` CLI from docker-ce-cli alone doesn't include either as a
+# separate binary/subcommand; without buildx, `docker build`/`docker compose
+# build` fall back to the legacy builder and print a "Docker Compose
+# requires buildx plugin to be installed" warning on every build (hit this
+# on the real NAS building an unrelated project inside this container).
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
         > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin docker-buildx-plugin \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Claude Code CLI (Anthropic's native installer, not npm) --------------
