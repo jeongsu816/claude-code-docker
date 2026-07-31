@@ -35,6 +35,7 @@ WETTY_PORT=3000
 FILEBROWSER_PORT=8080
 DEV_UID=1000
 DEV_GID=1000
+FILEBROWSER_MIN_PASSWORD_LENGTH=8
 ```
 
 `DEV_UID`/`DEV_GID`는 이미지 빌드 시 `dev` 계정에 고정되는 값이다(기본 1000).
@@ -124,12 +125,15 @@ SSH와 filebrowser는 **최초 실행 시 같은 비밀번호로 부트스트랩
 
 - SSH(그리고 wetty)는 Linux 시스템 계정(`passwd`로 변경)
 - filebrowser는 별도 DB(`${FILEBROWSER_DATA_PATH}`)에 자기 계정을 저장하며,
-  **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서 비밀번호를 바꾸면
-  그 이후로는 SSH와 달라진다. filebrowser 기본 최소 비밀번호 길이는 12자지만,
-  `filebrowser config init --minimumPasswordLength 8`로 8자로 낮춰뒀다
-  (하드코딩된 제약이 아니라 filebrowser 자체 설정값이다). 그래도
-  `DEV_PASSWORD`가 8자 미만이면 filebrowser 계정 부트스트랩이 건너뛰어지고
-  로그에 경고가 남는다 — 이 경우 filebrowser 자체의 quick-setup이 무작위
+  계정 자체는 **최초 1회만** 부트스트랩한다 — filebrowser 웹 UI에서
+  비밀번호를 바꾸면 그 이후로는 SSH와 달라진다. filebrowser 기본 최소
+  비밀번호 길이는 12자인데(하드코딩된 제약이 아니라 filebrowser 자체
+  설정값), `FILEBROWSER_MIN_PASSWORD_LENGTH`(기본 8) 값으로 **매 부팅마다**
+  다시 맞춘다 — 계정 부트스트랩과 달리 이건 최초 1회가 아니라 매번
+  적용되므로, DB가 이미 있는 채로 이미지를 올리는 배포에서도 filebrowser
+  자체 기본값(12)이 남아있지 않는다. 그래도 최초 부팅 시 `DEV_PASSWORD`가
+  8자 미만이면 filebrowser 계정 부트스트랩 자체가 건너뛰어지고 로그에
+  경고가 남는다 — 이 경우 filebrowser 자체의 quick-setup이 무작위
   비밀번호로 `admin` 계정을 만들어주니 로그에서 확인하거나, `DEV_PASSWORD`를
   8자 이상으로 바꿔 컨테이너를 재생성하면 된다. (filebrowser는 흔한
   비밀번호 목록도 따로 걸러내므로, 짧더라도 너무 단순한 값은 여전히
