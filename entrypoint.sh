@@ -195,6 +195,21 @@ if [ ! -f "${FILEBROWSER_DB}" ]; then
     fi
 fi
 
+# minimumPasswordLength는 Settings.MinimumPasswordLength로 DB에 저장되는
+# 값이라, 위 config init은 최초 부팅(DB가 없을 때) 한 번만 적용한다 — DB가
+# 이미 있던 채로 이미지를 올린 배포는 이 줄을 타지 않아 filebrowser 자체
+# 기본값(12)이 그대로 남아있을 수 있다(실제로 겪은 사례). 매 부팅마다
+# FILEBROWSER_MIN_PASSWORD_LENGTH 값으로 다시 맞춰서, DB가 어떤 경로로
+# 만들어졌든 항상 원하는 값을 유지하도록 한다. filebrowser 서버가 아직
+# 뜨기 전(supervisord 이전)이라 DB 잠금 걱정 없이 바로 적용 가능하다.
+if [ -f "${FILEBROWSER_DB}" ]; then
+    if ! gosu "${DEV_USER}" filebrowser config set --database "${FILEBROWSER_DB}" \
+        --minimumPasswordLength "${FILEBROWSER_MIN_PASSWORD_LENGTH:-8}" >/tmp/filebrowser-minpwlen.log 2>&1; then
+        log "경고: filebrowser 최소 비밀번호 길이 설정에 실패했습니다 (아래 로그 참고)."
+        cat /tmp/filebrowser-minpwlen.log
+    fi
+fi
+
 # Only disable claude's auto-updater when a specific CLAUDE_CODE_VERSION was
 # pinned at build time (see /etc/claude-code-version-pin, written by the
 # Dockerfile). Left at "latest", claude is free to self-update as normal.

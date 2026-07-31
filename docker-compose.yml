@@ -24,6 +24,7 @@ services:
       # 지정하지 않으면 컨테이너 최초 실행 시 무작위 비밀번호가 생성되어
       # `docker logs claude-code-docker` 에 출력됩니다.
       DEV_PASSWORD: ${DEV_PASSWORD:-}
+      FILEBROWSER_MIN_PASSWORD_LENGTH: ${FILEBROWSER_MIN_PASSWORD_LENGTH:-8}
     # compose가 프로젝트 전용 네트워크(claude-code-docker_default)를 새로
     # 만들지 않고, Container Manager의 다른 컨테이너들과 같은 도커 기본
     # bridge 네트워크에 바로 붙도록 지정. `networks: [default]` +
