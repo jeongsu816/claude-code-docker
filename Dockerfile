@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         lsof \
         strace \
         file \
+        bash-completion \
         iputils-ping \
         dnsutils \
         iproute2 \
