@@ -37,6 +37,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wget \
         unzip \
         zip \
+        jq \
+        less \
+        lsof \
+        strace \
+        file \
+        iputils-ping \
+        dnsutils \
+        iproute2 \
         ca-certificates \
         gnupg \
         git \
