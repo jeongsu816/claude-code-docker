@@ -35,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         vim \
         curl \
         wget \
+        unzip \
+        zip \
         ca-certificates \
         gnupg \
         git \
