@@ -50,6 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg \
         git \
         supervisor \
+        locales \
         gosu \
         build-essential \
         gdb \
@@ -69,6 +70,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libffi-dev \
         liblzma-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# --- locale (en_US.UTF-8) ------------------------------------------------
+# Debian's default C.UTF-8 handles raw UTF-8 bytes correctly (file contents,
+# piped/redirected output, etc. are never corrupted by it), but it's a
+# minimal synthetic locale whose wcwidth() tables for East-Asian wide
+# characters are incomplete. Programs that do live cursor-position math
+# while accepting input — bash's readline, tmux — depend on those tables,
+# so typing Korean/CJK text interactively over SSH or wetty visibly mangles
+# it even though the same bytes round-trip perfectly through anything that
+# doesn't do that math (confirmed: `printf '\355\225\234...'` prints 한글
+# cleanly even in a C.UTF-8 session). en_US.UTF-8 ships complete wide-char
+# tables without needing a Korean-specific locale database just for this.
+RUN sed -i '/^# en_US.UTF-8 UTF-8/s/^# //' /etc/locale.gen \
+    && locale-gen
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US:en
+# ENV above reaches supervisord's direct children (sshd's master process,
+# wetty, filebrowser) but not SSH login shells — sshd's PAM-based session
+# setup rebuilds the environment rather than inheriting sshd's own process
+# env (see the "SSH sessions vs. direct fork/exec" note in CLAUDE.md for the
+# first time this bit — DISABLE_AUTOUPDATER — cost real debugging time).
+# /etc/environment is read by pam_env.so and reaches login shells too.
+RUN printf '%s\n' 'LANG=en_US.UTF-8' 'LANGUAGE=en_US:en' >> /etc/environment
 
 # --- Docker CLI (client only; talks to the host's docker.sock) ---------
 # docker-compose-plugin adds `docker compose` (v2, CLI-plugin style) and
