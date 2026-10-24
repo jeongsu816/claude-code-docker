@@ -147,7 +147,8 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 # any PATH wiring of our own — it's already in Debian's default
 # /etc/skel/.profile.
 RUN HOME=/etc/skel bash -c "$(curl -fsSL https://claude.ai/install.sh)" -- "${CLAUDE_CODE_VERSION}" \
-    && echo "${CLAUDE_CODE_VERSION}" > /etc/claude-code-version-pin
+    && echo "${CLAUDE_CODE_VERSION}" > /etc/claude-code-version-pin \
+    && rm -rf /tmp/cc-socks
 
 # --- Node.js + wetty (web terminal; real SSH client, not a pty-exec) ------
 # Replaces ttyd. ttyd just execs a local command (tmux) behind a pty and had
